@@ -1,10 +1,11 @@
 import os
 import base64
+import json
 from flask import Flask, request, jsonify, render_template
 from openai import OpenAI
 
-# LangChain Multi-Tool Search Engine Setup
-from langchain_openai import ChatOpenAI
+# LangChain Search Engines
+from duckduckgo_search import DDGS
 from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
 from langchain_core.tools import Tool
@@ -15,60 +16,79 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 
 api_key = os.environ.get("OPENAI_API_KEY")
+serpapi_key = os.environ.get("SERPAPI_API_KEY")
 client = OpenAI(api_key=api_key)
 
 
 # ==========================================
-# MULTI-TOOL SEARCH ENGINE SETUP
+# ADVANCED SEARCH ENGINE & IMAGE FINDER
 # ==========================================
-def create_multi_search_tools():
-    """Initializes multiple search and retrieval tools."""
-    tools = []
+def perform_image_and_product_search(query):
+    """
+    Searches for live web images, stock photography, shopping URLs, and absolute web links.
+    """
+    search_results = {
+        "images": [],
+        "shopping_urls": [],
+        "stock_urls": [],
+        "web_urls": []
+    }
 
+    # 1. DuckDuckGo Image & Web Search (Free, no key required)
     try:
-        ddg_tool = DuckDuckGoSearchRun()
-        tools.append(Tool(
-            name="Web_Search_General",
-            func=ddg_tool.run,
-            description="Searches live web facts and current events."
-        ))
-    except Exception:
-        pass
+        with DDGS() as ddgs:
+            # Fetch Images
+            img_results = list(ddgs.images(keywords=query, max_results=6))
+            for img in img_results:
+                search_results["images"].append({
+                    "title": img.get("title", ""),
+                    "image_url": img.get("image", ""),
+                    "source_url": img.get("url", "")
+                })
 
-    try:
-        wiki = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper(top_k_results=2, doc_content_chars_max=1000))
-        tools.append(Tool(
-            name="Wikipedia_Knowledge_Base",
-            func=wiki.run,
-            description="Useful for historical, scientific, and technical facts."
-        ))
-    except Exception:
-        pass
+            # Fetch Web & Shopping Links
+            text_results = list(ddgs.text(keywords=query, max_results=6))
+            for res in text_results:
+                url = res.get("href", "")
+                title = res.get("title", "")
+                body = res.get("body", "").lower()
 
-    try:
-        from langchain_community.tools.tavily_search import TavilySearchResults
-        tools.append(Tool(
-            name="Tavily_AI_Search",
-            func=TavilySearchResults(k=3).run,
-            description="Factual deep web search optimized for AI."
-        ))
-    except Exception:
-        pass
+                # Categorize into Shopping, Stock, or Web URLs
+                if any(k in url.lower() or k in body for k in ["shop", "buy", "store", "amazon", "ebay", "etsy", "price"]):
+                    search_results["shopping_urls"].append({"title": title, "url": url})
+                elif any(k in url.lower() or k in body for k in ["shutterstock", "getty", "unsplash", "stock", "freepik", "adobe"]):
+                    search_results["stock_urls"].append({"title": title, "url": url})
+                else:
+                    search_results["web_urls"].append({"title": title, "url": url})
+    except Exception as e:
+        print(f"DuckDuckGo search error: {e}")
 
-    try:
-        from langchain_community.utilities import SerpAPIWrapper
-        serp_tool = SerpAPIWrapper()
-        tools.append(Tool(
-            name="SerpApi_Google_Search",
-            func=serp_tool.run,
-            description="Searches Google results using SerpApi."
-        ))
-    except Exception:
-        pass
+    # 2. SerpApi Google Images/Shopping (Optional backup if key is available)
+    if serpapi_key:
+        try:
+            from serpapi import GoogleSearch
+            # Google Images
+            params = {"engine": "google_images", "q": query, "api_key": serpapi_key, "num": 5}
+            serp_img = GoogleSearch(params).get_dict().get("images_results", [])
+            for item in serp_img:
+                search_results["images"].append({
+                    "title": item.get("title", ""),
+                    "image_url": item.get("original", ""),
+                    "source_url": item.get("link", "")
+                })
 
-    return tools
+            # Google Shopping
+            shop_params = {"engine": "google_shopping", "q": query, "api_key": serpapi_key, "num": 4}
+            serp_shop = GoogleSearch(shop_params).get_dict().get("shopping_results", [])
+            for item in serp_shop:
+                search_results["shopping_urls"].append({
+                    "title": item.get("title", "Shop Item"),
+                    "url": item.get("link", "")
+                })
+        except Exception as e:
+            print(f"SerpApi error: {e}")
 
-search_tools = create_multi_search_tools()
+    return search_results
 
 
 # ==========================================
@@ -90,26 +110,24 @@ def chat():
     if len(image_files) > 10:
         return jsonify({"error": "Maximum of 10 images allowed per request."}), 400
 
-    # 1. Fetch web search context if query text exists
-    fetched_context = ""
-    if user_text and search_tools:
-        try:
-            for tool in search_tools:
-                result = tool.func(user_text)
-                if result:
-                    fetched_context += f"\n--- Source ({tool.name}) ---\n{result}\n"
-        except Exception as e:
-            fetched_context = f"Search tool issue: {str(e)}"
+    # 1. Detect if the user wants images, stock photos, or product recommendations
+    search_data = None
+    query_lower = user_text.lower()
+    triggers = ["show me", "picture of", "photo of", "image of", "find me", "buy", "stock photo", "where to get", "look like"]
+
+    if user_text and any(trigger in query_lower for trigger in triggers):
+        search_data = perform_image_and_product_search(user_text)
 
     # 2. System Instructions
     system_instruction = (
-        "You are an exceptionally intelligent, concise, and direct AI assistant powered by gpt-4.1-mini.\n"
-        "1. When provided with image(s), IMMEDIATELY solve, answer, or analyze their content directly. Do NOT describe what the images look like.\n"
-        "2. Cross-reference all fetched search data below to ensure maximum accuracy."
+        "You are an exceptionally intelligent, concise, and direct AI assistant.\n"
+        "1. When asked for pictures, photos, shopping options, or stock links, acknowledge the query directly and summarize what you found.\n"
+        "2. Cross-reference provided search data to suggest absolute URLs for shopping, stock photos, and official web references.\n"
+        "3. Always output active markdown links `[Title](URL)` for all suggested links."
     )
 
-    if fetched_context:
-        system_instruction += f"\n\n[FETCHED MULTI-SOURCE SEARCH CONTEXT]\n{fetched_context}\n[END CONTEXT]"
+    if search_data:
+        system_instruction += f"\n\n[LIVE SEARCH & IMAGE DATA FOUND]\n{json.dumps(search_data, indent=2)}\n[END SEARCH DATA]"
 
     # 3. Construct OpenAI user payload
     user_content = []
@@ -146,7 +164,11 @@ def chat():
             temperature=0.2
         )
         reply = response.choices[0].message.content
-        return jsonify({"reply": reply})
+
+        return jsonify({
+            "reply": reply,
+            "found_media": search_data
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

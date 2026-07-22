@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Vision ChatGPT</title>
+
+    <style>
+      * {
+        box-sizing: border-box;
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      body {
+        margin: 0;
+
+        height: 100vh;
+
+        background: #343541;
+
+        display: flex;
+
+        justify-content: center;
+
+        align-items: center;
+
+        color: white;
+      }
+
+      .chat {
+        width: 95%;
+
+        max-width: 900px;
+
+        height: 95vh;
+
+        background: #202123;
+
+        border-radius: 12px;
+
+        display: flex;
+
+        flex-direction: column;
+
+        overflow: hidden;
+      }
+
+      .header {
+        background: #111827;
+
+        padding: 20px;
+
+        text-align: center;
+
+        font-size: 24px;
+
+        font-weight: bold;
+      }
+
+      #messages {
+        flex: 1;
+
+        overflow-y: auto;
+
+        padding: 20px;
+      }
+
+      .message {
+        padding: 12px;
+
+        margin-bottom: 15px;
+
+        border-radius: 10px;
+
+        max-width: 80%;
+
+        white-space: pre-wrap;
+      }
+
+      .user {
+        background: #2563eb;
+
+        margin-left: auto;
+      }
+
+      .ai {
+        background: #444654;
+
+        margin-right: auto;
+      }
+
+      .message img {
+        margin-top: 10px;
+
+        width: 250px;
+
+        border-radius: 8px;
+      }
+
+      .input-area {
+        background: #111827;
+
+        padding: 15px;
+
+        display: flex;
+
+        gap: 10px;
+
+        align-items: center;
+      }
+
+      textarea {
+        flex: 1;
+
+        height: 55px;
+
+        resize: none;
+
+        border-radius: 8px;
+
+        border: none;
+
+        padding: 12px;
+
+        font-size: 16px;
+      }
+
+      button {
+        background: #10a37f;
+
+        color: white;
+
+        border: none;
+
+        border-radius: 8px;
+
+        padding: 15px 20px;
+
+        cursor: pointer;
+
+        font-size: 16px;
+      }
+
+      button:hover {
+        background: #0d8f6f;
+      }
+
+      input[type="file"] {
+        color: white;
+
+        width: 150px;
+      }
+
+      #preview {
+        padding: 10px 20px;
+      }
+
+      #preview img {
+        width: 100px;
+
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="chat">
+      <div class="header">Vision ChatGPT</div>
+
+      <div id="messages"></div>
+
+      <div id="preview"></div>
+
+      <div class="input-area">
+        <textarea
+          id="text"
+          placeholder="Ask anything or upload an image..."
+        ></textarea>
+
+        <input id="file" type="file" accept="image/*" />
+
+        <button onclick="send()">Send</button>
+      </div>
+    </div>
+
+    <script>
+      let imageFile = null;
+
+      const messages = document.getElementById("messages");
+
+      const fileInput = document.getElementById("file");
+
+      const preview = document.getElementById("preview");
+
+      fileInput.onchange = function () {
+        imageFile = this.files[0];
+
+        showPreview();
+      };
+
+      document.addEventListener("paste", function (event) {
+        let items = event.clipboardData.items;
+
+        for (let item of items) {
+          if (item.type.startsWith("image")) {
+            imageFile = item.getAsFile();
+
+            showPreview();
+          }
+        }
+      });
+
+      function showPreview() {
+        preview.innerHTML = "";
+
+        if (imageFile) {
+          let img = document.createElement("img");
+
+          img.src = URL.createObjectURL(imageFile);
+
+          preview.appendChild(img);
+        }
+      }
+
+      function addMessage(text, className, image = null) {
+        let div = document.createElement("div");
+
+        div.className = "message " + className;
+
+        div.textContent = text;
+
+        if (image) {
+          let img = document.createElement("img");
+
+          img.src = URL.createObjectURL(image);
+
+          div.appendChild(img);
+        }
+
+        messages.appendChild(div);
+
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      async function send() {
+        let text = document.getElementById("text").value;
+
+        if (!text && !imageFile) {
+          return;
+        }
+
+        addMessage(text, "user", imageFile);
+
+        let form = new FormData();
+
+        form.append("message", text);
+
+        if (imageFile) {
+          form.append("image", imageFile);
+        }
+
+        document.getElementById("text").value = "";
+
+        imageFile = null;
+
+        preview.innerHTML = "";
+
+        let response = await fetch("/chat", {
+          method: "POST",
+
+          body: form,
+        });
+
+        let data = await response.json();
+
+        addMessage(data.reply, "ai");
+      }
+
+      document
+        .getElementById("text")
+        .addEventListener("keydown", function (event) {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+
+            send();
+          }
+        });
+    </script>
+  </body>
+</html>

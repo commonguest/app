@@ -186,26 +186,27 @@
 
     <script>
       let imageFile = null;
+      let isThinking = false; // Flag to lock/unlock user input
 
       const messages = document.getElementById("messages");
-
       const fileInput = document.getElementById("file");
-
       const preview = document.getElementById("preview");
+      const textarea = document.getElementById("text");
+      const sendBtn = document.querySelector("button");
 
       fileInput.onchange = function () {
+        if (isThinking) return;
         imageFile = this.files[0];
-
         showPreview();
       };
 
       document.addEventListener("paste", function (event) {
+        if (isThinking) return; // Prevent pasting while processing
         let items = event.clipboardData.items;
 
         for (let item of items) {
           if (item.type.startsWith("image")) {
             imageFile = item.getAsFile();
-
             showPreview();
           }
         }
@@ -213,79 +214,96 @@
 
       function showPreview() {
         preview.innerHTML = "";
-
         if (imageFile) {
           let img = document.createElement("img");
-
           img.src = URL.createObjectURL(imageFile);
-
           preview.appendChild(img);
         }
       }
 
       function addMessage(text, className, image = null) {
         let div = document.createElement("div");
-
         div.className = "message " + className;
-
         div.textContent = text;
 
         if (image) {
           let img = document.createElement("img");
-
           img.src = URL.createObjectURL(image);
-
           div.appendChild(img);
         }
 
         messages.appendChild(div);
-
         messages.scrollTop = messages.scrollHeight;
+        return div;
+      }
+
+      // Utility function to enable/disable UI controls
+      function setInputState(disabled) {
+        isThinking = disabled;
+        textarea.disabled = disabled;
+        fileInput.disabled = disabled;
+        sendBtn.disabled = disabled;
+        sendBtn.style.opacity = disabled ? "0.5" : "1";
+        sendBtn.style.cursor = disabled ? "not-allowed" : "pointer";
       }
 
       async function send() {
-        let text = document.getElementById("text").value;
+        // If already processing or both fields are empty, block submission
+        if (isThinking) return;
 
-        if (!text && !imageFile) {
-          return;
-        }
+        let text = textarea.value.trim();
+        if (!text && !imageFile) return;
 
+        // 1. Lock the inputs immediately
+        setInputState(true);
+
+        // 2. Display the user's message
         addMessage(text, "user", imageFile);
 
         let form = new FormData();
-
         form.append("message", text);
-
         if (imageFile) {
           form.append("image", imageFile);
         }
 
-        document.getElementById("text").value = "";
-
+        // Reset input fields
+        textarea.value = "";
         imageFile = null;
-
         preview.innerHTML = "";
 
-        let response = await fetch("/chat", {
-          method: "POST",
+        // 3. Show a temporary loading indicator
+        let thinkingDiv = addMessage("Thinking...", "ai");
 
-          body: form,
-        });
+        try {
+          let response = await fetch("/chat", {
+            method: "POST",
+            body: form,
+          });
 
-        let data = await response.json();
+          let data = await response.json();
 
-        addMessage(data.reply, "ai");
+          // Replace "Thinking..." with actual reply
+          if (response.ok) {
+            thinkingDiv.textContent = data.reply;
+          } else {
+            thinkingDiv.textContent =
+              "Error: " + (data.error || "Failed to generate reply.");
+          }
+        } catch (err) {
+          thinkingDiv.textContent = "Error sending message. Please try again.";
+        } finally {
+          // 4. Unlock inputs when complete (whether success or error)
+          setInputState(false);
+          textarea.focus();
+        }
       }
 
-      document
-        .getElementById("text")
-        .addEventListener("keydown", function (event) {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-
-            send();
-          }
-        });
+      textarea.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          send();
+        }
+      });
     </script>
   </body>
 </html>

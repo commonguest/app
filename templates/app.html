@@ -58,9 +58,14 @@
       .message {
         padding: 12px;
         border-radius: 10px;
-        max-width: 80%;
+        max-width: 85%;
         white-space: pre-wrap;
         word-wrap: break-word;
+      }
+
+      .message a {
+        color: #60a5fa;
+        text-decoration: underline;
       }
 
       .user {
@@ -105,6 +110,70 @@
       @keyframes infinity-glow {
         0% { stroke-dashoffset: 0; }
         100% { stroke-dashoffset: -165; }
+      }
+
+      /* Web Search Found Media Cards */
+      .media-container {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .found-images-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .found-images-grid a {
+        display: block;
+        overflow: hidden;
+        border-radius: 8px;
+        border: 1px solid #4b5563;
+        height: 100px;
+      }
+
+      .found-images-grid img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition: transform 0.2s;
+      }
+
+      .found-images-grid img:hover {
+        transform: scale(1.05);
+      }
+
+      .urls-card {
+        background: #2a2b32;
+        border: 1px solid #3f3f46;
+        border-radius: 8px;
+        padding: 10px;
+        margin-top: 8px;
+      }
+
+      .urls-card h4 {
+        margin: 0 0 6px 0;
+        font-size: 13px;
+        color: #9ca3af;
+        text-transform: uppercase;
+      }
+
+      .url-badge {
+        display: inline-block;
+        background: #374151;
+        color: #60a5fa;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        margin: 3px 3px 3px 0;
+        text-decoration: none;
+      }
+
+      .url-badge:hover {
+        background: #4b5563;
       }
 
       .action-buttons {
@@ -261,7 +330,7 @@
 
         <textarea
           id="text"
-          placeholder="Ask anything or paste/upload images..."
+          placeholder="Ask anything, search photos, or paste/upload images..."
           rows="1"
         ></textarea>
 
@@ -367,9 +436,7 @@
 
         function formatGrammarAndPunctuation(text) {
           if (!text) return "";
-
           let formatted = text.trim();
-
           formatted = formatted
             .replace(/\b(comma)\b/gi, ",")
             .replace(/\b(period|full stop)\b/gi, ".")
@@ -406,16 +473,11 @@
         };
 
         recognition.onerror = function (event) {
-          console.error("Speech Recognition Error:", event.error);
-          if (event.error !== "no-speech") {
-            stopRecording();
-          }
+          if (event.error !== "no-speech") stopRecording();
         };
 
         recognition.onend = function () {
-          if (isRecording) {
-            recognition.start();
-          }
+          if (isRecording) recognition.start();
         };
       } else {
         micBtn.style.display = "none";
@@ -451,9 +513,7 @@
 
         if (textarea.value.trim()) {
           let formatted = formatGrammarAndPunctuation(textarea.value);
-          if (!/[,\.\?!]$/.test(formatted)) {
-            formatted += ".";
-          }
+          if (!/[,\.\?!]$/.test(formatted)) formatted += ".";
           textarea.value = formatted;
           finalTranscript = formatted;
         }
@@ -467,11 +527,7 @@
         navigator.clipboard.writeText(text).then(() => {
           const originalText = btnElement.innerHTML;
           btnElement.innerHTML = "✓ Copied!";
-          setTimeout(() => {
-            btnElement.innerHTML = originalText;
-          }, 2000);
-        }).catch(err => {
-          alert("Failed to copy text.");
+          setTimeout(() => { btnElement.innerHTML = originalText; }, 2000);
         });
       }
 
@@ -490,7 +546,6 @@
       function downloadAsPDF(text) {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
-
         const splitText = doc.splitTextToSize(text, 180);
         let y = 15;
         const pageHeight = doc.internal.pageSize.height;
@@ -507,10 +562,15 @@
         doc.save(`response_${Date.now()}.pdf`);
       }
 
+      // Convert Markdown Links `[text](url)` to HTML Anchor tags
+      function parseMarkdownLinks(text) {
+        return text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      }
+
       // -------------------------------------------------------------
       // CHAT SUBMISSION LOGIC
       // -------------------------------------------------------------
-      function addMessage(text, className, files = [], isAiResponse = false, isLoader = false) {
+      function addMessage(text, className, files = [], isAiResponse = false, isLoader = false, mediaData = null) {
         let wrapper = document.createElement("div");
         wrapper.className = "message-wrapper";
 
@@ -518,7 +578,6 @@
         div.className = "message " + className;
 
         if (isLoader) {
-          // Transparent SVG infinity loader with soft light animation
           div.innerHTML = `
             <div class="infinity-loader-container">
               <svg class="infinity-svg" viewBox="0 0 100 50">
@@ -528,20 +587,85 @@
             </div>
           `;
         } else {
-          div.textContent = text;
+          div.innerHTML = parseMarkdownLinks(text);
         }
 
+        // Render User Uploaded Images
         if (files.length > 0) {
           let gallery = document.createElement("div");
           gallery.className = "image-gallery";
-
           files.forEach((file) => {
             let img = document.createElement("img");
             img.src = URL.createObjectURL(file);
             gallery.appendChild(img);
           });
-
           div.appendChild(gallery);
+        }
+
+        // Render Web Search Images & Absolute URLs
+        if (mediaData) {
+          let mediaContainer = document.createElement("div");
+          mediaContainer.className = "media-container";
+
+          // Render Image Search Results
+          if (mediaData.images && mediaData.images.length > 0) {
+            let imgGrid = document.createElement("div");
+            imgGrid.className = "found-images-grid";
+
+            mediaData.images.slice(0, 4).forEach((item) => {
+              let a = document.createElement("a");
+              a.href = item.source_url || item.image_url;
+              a.target = "_blank";
+              a.title = item.title;
+
+              let img = document.createElement("img");
+              img.src = item.image_url;
+              a.appendChild(img);
+              imgGrid.appendChild(a);
+            });
+            mediaContainer.appendChild(imgGrid);
+          }
+
+          // Render Shopping / Stock / Web Badges
+          let urlCard = document.createElement("div");
+          urlCard.className = "urls-card";
+          let hasUrls = false;
+
+          if (mediaData.shopping_urls && mediaData.shopping_urls.length > 0) {
+            hasUrls = true;
+            let header = document.createElement("h4");
+            header.textContent = "🛒 Shopping Links:";
+            urlCard.appendChild(header);
+            mediaData.shopping_urls.forEach((item) => {
+              let badge = document.createElement("a");
+              badge.className = "url-badge";
+              badge.href = item.url;
+              badge.target = "_blank";
+              badge.textContent = item.title.substring(0, 30) + "...";
+              urlCard.appendChild(badge);
+            });
+          }
+
+          if (mediaData.stock_urls && mediaData.stock_urls.length > 0) {
+            hasUrls = true;
+            let header = document.createElement("h4");
+            header.textContent = "🖼️ Stock Photo Links:";
+            urlCard.appendChild(header);
+            mediaData.stock_urls.forEach((item) => {
+              let badge = document.createElement("a");
+              badge.className = "url-badge";
+              badge.href = item.url;
+              badge.target = "_blank";
+              badge.textContent = item.title.substring(0, 30) + "...";
+              urlCard.appendChild(badge);
+            });
+          }
+
+          if (hasUrls) {
+            mediaContainer.appendChild(urlCard);
+          }
+
+          div.appendChild(mediaContainer);
         }
 
         wrapper.appendChild(div);
@@ -586,9 +710,7 @@
         sendBtn.style.opacity = disabled ? "0.5" : "1";
         sendBtn.style.cursor = disabled ? "not-allowed" : "pointer";
 
-        if (disabled && isRecording) {
-          stopRecording();
-        }
+        if (disabled && isRecording) stopRecording();
       }
 
       async function send() {
@@ -611,7 +733,7 @@
         selectedFiles = [];
         preview.innerHTML = "";
 
-        // Display animated infinity loader while generating response
+        // Display animated infinity loader
         let thinkingMsg = addMessage("", "ai", [], false, true);
 
         try {
@@ -625,7 +747,7 @@
           thinkingMsg.wrapper.remove();
 
           if (response.ok) {
-            addMessage(data.reply, "ai", [], true);
+            addMessage(data.reply, "ai", [], true, false, data.found_media);
           } else {
             addMessage("Error: " + (data.error || "Failed to generate response."), "ai", [], false);
           }

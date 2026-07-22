@@ -1,138 +1,195 @@
 import os
-import tempfile
 import base64
 from flask import Flask, request, jsonify, render_template_string
-from werkzeug.utils import secure_filename
+from openai import OpenAI
 
 app = Flask(__name__)
 
-# 1. ALLOW BIGGER PAYLOADS (Prevents 413 errors when pasting large images)
+# Make sure your OPENAI_API_KEY is set in Render's Environment Variables!
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# 1. ALLOW BIGGER PAYLOADS (Pasted image Base64 data can be large)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB limit
 
-# 2. SAFE UPLOAD DIRECTORY (Uses Render's writable /tmp folder)
-UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'app_uploads')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-
-# 3. ROUTE TO SERVE YOUR FRONTEND PAGE
+# 2. CHAT UI WITH IMAGE UPLOAD & PASTE SUPPORT
 @app.route('/')
 def index():
-    # Simple UI with upload input and clipboard paste listener
     return render_template_string('''
         <!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <title>Image Upload App</title>
+            <title>AI Vision Chat</title>
             <style>
-                body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; text-align: center; }
-                .drop-zone { border: 2px dashed #ccc; padding: 40px; border-radius: 8px; margin-top: 20px; cursor: pointer; }
-                .drop-zone:hover { border-color: #888; }
-                img { max-width: 100%; height: auto; margin-top: 20px; border-radius: 6px; }
+                body { font-family: sans-serif; max-width: 700px; margin: 30px auto; padding: 0 20px; }
+                #chat-box { border: 1px solid #ccc; height: 400px; overflow-y: auto; padding: 15px; border-radius: 8px; margin-bottom: 15px; background: #f9f9f9; }
+                .message { margin-bottom: 15px; }
+                .user { font-weight: bold; color: #0066cc; }
+                .assistant { color: #222; background: #fff; padding: 10px; border-radius: 6px; border: 1px solid #ddd; }
+                .preview-img { max-width: 200px; display: block; margin-top: 5px; border-radius: 4px; }
+                .controls { display: flex; gap: 10px; align-items: center; }
+                input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+                button { padding: 10px 15px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; }
+                #image-preview-container { margin-bottom: 10px; display: none; align-items: center; gap: 10px; }
             </style>
         </head>
         <body>
-            <h2>Upload or Paste an Image</h2>
-            <p>Click below to choose a file, drag & drop, or press <b>Ctrl+V / Cmd+V</b> to paste.</p>
+            <h2>AI Chat (Text + Image Support)</h2>
+            <div id="chat-box"></div>
 
-            <div class="drop-zone" id="drop-zone">
-                <input type="file" id="file-input" accept="image/*" style="display: none;">
-                <p>Click or drag image here</p>
+            <div id="image-preview-container">
+                <span id="preview-label" style="font-size: 0.9em; color: #555;">Image Attached!</span>
+                <button type="button" onclick="clearImage()" style="background: red; padding: 2px 8px; font-size: 0.8em;">Remove</button>
             </div>
 
-            <div id="result"></div>
+            <div class="controls">
+                <input type="file" id="file-input" accept="image/*" style="display: none;">
+                <button type="button" onclick="document.getElementById('file-input').click()">📎 Upload</button>
+                <input type="text" id="user-input" placeholder="Type a message or press Ctrl+V / Cmd+V to paste an image...">
+                <button type="button" onclick="sendMessage()">Send</button>
+            </div>
 
             <script>
+                let currentBase64Image = null;
+
                 const fileInput = document.getElementById('file-input');
-                const dropZone = document.getElementById('drop-zone');
-                const resultDiv = document.getElementById('result');
+                const userInput = document.getElementById('user-input');
+                const previewContainer = document.getElementById('image-preview-container');
 
-                // Click box to trigger file select
-                dropZone.addEventListener('click', () => fileInput.click());
-
-                // Handle file input selection
+                // 1. Handle File Upload via Button
                 fileInput.addEventListener('change', (e) => {
                     if (e.target.files.length > 0) {
-                        uploadFile(e.target.files[0]);
+                        processFile(e.target.files[0]);
                     }
                 });
 
-                // Handle Clipboard Paste (Ctrl+V or Cmd+V)
+                // 2. Handle Paste Event (Ctrl+V / Cmd+V)
                 document.addEventListener('paste', (event) => {
                     const items = (event.clipboardData || window.clipboardData).items;
                     for (const item of items) {
                         if (item.type.indexOf('image') !== -1) {
                             const blob = item.getAsFile();
-                            uploadFile(blob);
+                            processFile(blob);
                             break;
                         }
                     }
                 });
 
-                // Send image to backend via relative URL '/upload'
-                async function uploadFile(file) {
-                    const formData = new FormData();
-                    formData.append('file', file, file.name || 'pasted_image.png');
+                // Convert image file/blob to Base64
+                function processFile(file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        currentBase64Image = e.target.result; // Full data URL (data:image/png;base64,...)
+                        previewContainer.style.display = 'flex';
+                    };
+                    reader.readAsDataURL(file);
+                }
 
-                    resultDiv.innerHTML = '<p>Uploading...</p>';
+                function clearImage() {
+                    currentBase64Image = null;
+                    fileInput.value = '';
+                    previewContainer.style.display = 'none';
+                }
 
+                // 3. Send Message to Backend
+                async function sendMessage() {
+                    const text = userInput.value.trim();
+                    if (!text && !currentBase64Image) return;
+
+                    const chatBox = document.getElementById('chat-box');
+
+                    // Add user message to UI
+                    let userHtml = `<div class="message"><span class="user">You:</span> ${text}`;
+                    if (currentBase64Image) {
+                        userHtml += `<img src="${currentBase64Image}" class="preview-img">`;
+                    }
+                    userHtml += `</div>`;
+                    chatBox.innerHTML += userHtml;
+
+                    // Clear inputs
+                    const payload = { message: text, image_data: currentBase64Image };
+                    userInput.value = '';
+                    clearImage();
+                    chatBox.scrollTop = chatBox.scrollHeight;
+
+                    // Call backend /chat
                     try {
-                        const response = await fetch('/upload', {
+                        const response = await fetch('/chat', {
                             method: 'POST',
-                            body: formData
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
                         });
                         const data = await response.json();
 
                         if (response.ok) {
-                            resultDiv.innerHTML = `
-                                <p style="color: green;"><b>Success!</b> Saved to ${data.path}</p>
-                                <img src="${data.preview_url}" alt="Uploaded image" />
-                            `;
+                            chatBox.innerHTML += `<div class="message"><div class="assistant"><b>AI:</b> ${data.reply}</div></div>`;
                         } else {
-                            resultDiv.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
+                            chatBox.innerHTML += `<div class="message" style="color:red;">Error: ${data.error}</div>`;
                         }
                     } catch (err) {
-                        resultDiv.innerHTML = `<p style="color: red;">Upload failed. Check console for details.</p>`;
-                        console.error('Upload Error:', err);
+                        chatBox.innerHTML += `<div class="message" style="color:red;">Failed to send message.</div>`;
                     }
+                    chatBox.scrollTop = chatBox.scrollHeight;
                 }
+
+                // Allow pressing Enter to send
+                userInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') sendMessage();
+                });
             </script>
         </body>
         </html>
     ''')
 
 
-# 4. ROUTE TO HANDLE FILE UPLOADS AND PASTED IMAGES
-@app.route('/upload', methods=['POST'])
-def upload():
-    # Handle File or Pasted Image via FormData
-    if 'file' in request.files:
-        file = request.files['file']
-        if file.filename != '':
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            
-            # Save file safely to /tmp directory
-            file.save(filepath)
+# 3. OPENAI VISION CHAT ENDPOINT
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid request"}), 400
 
-            # Generate base64 string so frontend can immediately render preview
-            file.seek(0)
-            encoded_img = base64.b64encode(file.read()).decode('utf-8')
-            preview_url = f"data:image/png;base64,{encoded_img}"
+    user_text = data.get('message', '')
+    image_data = data.get('image_data')  # Base64 string
 
-            return jsonify({
-                "status": "success",
-                "filename": filename,
-                "path": filepath,
-                "preview_url": preview_url
-            })
+    # Construct content payload for OpenAI
+    content = []
+    
+    if user_text:
+        content.append({"type": "text", "text": user_text})
+    elif image_data:
+        # Default prompt if user uploads an image without text
+        content.append({"type": "text", "text": "What is in this image?"})
 
-    return jsonify({"error": "No file received"}), 400
+    if image_data:
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": image_data  # Pass base64 data URL directly to OpenAI
+            }
+        })
+
+    try:
+        # Use gpt-4o which natively handles both text and images
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": content
+                }
+            ],
+            max_tokens=500
+        )
+        reply = response.choices[0].message.content
+        return jsonify({"reply": reply})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-# 5. START APP
+# 4. START APP
 if __name__ == '__main__':
-    # Render assigns its own PORT environment variable
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)

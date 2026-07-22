@@ -48,6 +48,18 @@ def create_multi_search_tools():
     except Exception:
         pass
 
+    # ---> PUT YOUR NEW CODE HERE <---
+    # Tool 3: Tavily AI Search (requires TAVILY_API_KEY in Render Environment)
+    try:
+        from langchain_community.tools.tavily_search import TavilySearchResults
+        tools.append(Tool(
+            name="Tavily_AI_Search",
+            func=TavilySearchResults(k=3).run,
+            description="Factual deep web search optimized for AI context."
+        ))
+    except Exception:
+        pass
+
     return tools
 
 # Initialize Agent Tools

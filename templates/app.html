@@ -206,6 +206,7 @@
       let isThinking = false;
       let recognition = null;
       let isRecording = false;
+      let finalTranscript = ""; // Persistent transcript storage to prevent resets on pauses
 
       const maxImages = 10;
       const messages = document.getElementById("messages");
@@ -215,16 +216,18 @@
       const sendBtn = document.getElementById("send-btn");
       const micBtn = document.getElementById("mic-btn");
 
-      // Dynamic resize & scrolling function reusable by typing & speech events
       function adjustTextareaSize() {
         textarea.style.height = "auto";
         textarea.style.height = Math.min(textarea.scrollHeight, 150) + "px";
         textarea.scrollTop = textarea.scrollHeight;
       }
 
-      textarea.addEventListener("input", adjustTextareaSize);
+      textarea.addEventListener("input", function() {
+        // If the user manually edits the text field, sync our voice state
+        finalTranscript = textarea.value;
+        adjustTextareaSize();
+      });
 
-      // File uploading and previews
       fileInput.onchange = function () {
         if (isThinking) return;
         addFiles(Array.from(this.files));
@@ -285,7 +288,7 @@
       }
 
       // -------------------------------------------------------------
-      // VOICE-TO-TEXT WITH AUTOMATIC GRAMMAR, PUNCTUATION & SCROLLING
+      // SPEECH RECOGNITION WITH ACCUMULATIVE SPEECH & CONTINUOUS PAUSES
       // -------------------------------------------------------------
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -294,63 +297,66 @@
         recognition.continuous = true;
         recognition.interimResults = true;
 
-        // Formats raw transcript into capitalized sentences with commas and periods
         function formatGrammarAndPunctuation(text) {
           if (!text) return "";
 
           let formatted = text.trim();
 
-          // Spoken words punctuation translation
+          // Spoken command substitutions
           formatted = formatted
             .replace(/\b(comma)\b/gi, ",")
             .replace(/\b(period|full stop)\b/gi, ".")
             .replace(/\b(question mark)\b/gi, "?")
             .replace(/\b(exclamation mark|exclamation point)\b/gi, "!");
 
-          // Auto-insert commas before transitional/connecting conjunctions if missing
+          // Auto-insert commas before transitional words
           formatted = formatted.replace(/([^,\.\?!])\s+(however|but|although|meanwhile|therefore)\b/gi, "$1, $2");
 
-          // Clean duplicate spaces and fix punctuation spacing
+          // Clean up multiple spaces and spaces before punctuation
           formatted = formatted.replace(/\s+/g, " ");
           formatted = formatted.replace(/\s+([,\.\?!])/g, "$1");
 
-          // Ensure proper sentence capitalization
-          formatted = formatted.replace(/(^\s*|[[\.\?!]\s+)([a-z])/g, (match, separator, char) => {
+          // Capitalize first letter of sentences
+          formatted = formatted.replace(/(^\s*|[\.\?!]\s+)([a-z])/g, (match, separator, char) => {
             return separator + char.toUpperCase();
           });
-
-          // Ensure ending punctuation if continuous statement ends
-          if (!/[,\.\?!]$/.test(formatted)) {
-            formatted += ".";
-          }
 
           return formatted;
         }
 
         recognition.onresult = function (event) {
-          let rawTranscript = "";
+          let interimTranscript = "";
 
-          for (let i = 0; i < event.results.length; i++) {
-            rawTranscript += event.results[i][0].transcript + " ";
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              // Append finalized words to our persistent transcript buffer
+              finalTranscript += " " + event.results[i][0].transcript;
+            } else {
+              // Temporary words actively being spoken
+              interimTranscript += event.results[i][0].transcript;
+            }
           }
 
-          // Apply grammar and punctuation rules
-          let cleanTranscript = formatGrammarAndPunctuation(rawTranscript);
+          // Combine saved speech history + active live speech
+          let combinedText = finalTranscript + " " + interimTranscript;
+          let formattedText = formatGrammarAndPunctuation(combinedText);
 
-          // Update text value
-          textarea.value = cleanTranscript;
-
-          // Force wrap update & dynamic scroll to bottom while speaking
+          textarea.value = formattedText;
           adjustTextareaSize();
         };
 
         recognition.onerror = function (event) {
           console.error("Speech Recognition Error:", event.error);
-          stopRecording();
+          if (event.error !== "no-speech") {
+            stopRecording();
+          }
         };
 
+        // Auto-restart recognition if browser stops it due to long silence while mic is active
         recognition.onend = function () {
-          stopRecording();
+          if (isRecording) {
+            recognition.start();
+          }
         };
       } else {
         micBtn.style.display = "none";
@@ -372,6 +378,8 @@
 
       function startRecording() {
         isRecording = true;
+        // Seed our persistent transcript with existing box content
+        finalTranscript = textarea.value; 
         micBtn.classList.add("recording");
         micBtn.textContent = "🛑";
         recognition.start();
@@ -382,11 +390,21 @@
         micBtn.classList.remove("recording");
         micBtn.textContent = "🎤";
         if (recognition) recognition.stop();
+
+        // Finalize grammar pass on complete text block
+        if (textarea.value.trim()) {
+          let formatted = formatGrammarAndPunctuation(textarea.value);
+          if (!/[,\.\?!]$/.test(formatted)) {
+            formatted += ".";
+          }
+          textarea.value = formatted;
+          finalTranscript = formatted;
+        }
         adjustTextareaSize();
       }
 
       // -------------------------------------------------------------
-      // SEND CHAT COMMANDS & LOCK CONTROLS WHILE THINKING
+      // CHAT SUBMISSION LOGIC
       // -------------------------------------------------------------
       function addMessage(text, className, files = []) {
         let div = document.createElement("div");
@@ -441,6 +459,7 @@
         selectedFiles.forEach((file) => form.append("images", file));
 
         textarea.value = "";
+        finalTranscript = ""; // Reset persistent transcript buffer after sending
         textarea.style.height = "50px";
         selectedFiles = [];
         preview.innerHTML = "";

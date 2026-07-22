@@ -1,34 +1,62 @@
 import os
+import base64
 from flask import Flask, request, jsonify, render_template_string
 from openai import OpenAI
-from duckduckgo_search import DDGS
+
+# LangChain Multi-Tool Search Agent Setup
+from langchain_openai import ChatOpenAI
+from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
+from langchain_community.utilities import WikipediaAPIWrapper
+from langchain.agents import initialize_agent, AgentType, Tool
 
 app = Flask(__name__)
 
-# Make sure OPENAI_API_KEY is configured in Render Environment Variables
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-# Payloads up to 32MB for memory and high-res pasted images
+# Payloads up to 32MB for chat memory and high-res pasted images
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 
+# Setup OpenAI API Key
+api_key = os.environ.get("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key)
 
-def perform_web_search(query, max_results=3):
-    """Fetches real-time web search results using DuckDuckGo."""
+
+# ==========================================
+# MULTI-TOOL SEARCH ENGINE SETUP
+# ==========================================
+def create_multi_search_tools():
+    """Initializes multiple search and retrieval tools."""
+    tools = []
+
+    # Tool 1: General Web Search (DuckDuckGo Text)
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-            if not results:
-                return "No search results found."
-            
-            formatted_results = []
-            for r in results:
-                formatted_results.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}\nURL: {r.get('href')}\n")
-            return "\n---\n".join(formatted_results)
-    except Exception as e:
-        return f"Web search error: {str(e)}"
+        ddg_tool = DuckDuckGoSearchRun()
+        tools.append(Tool(
+            name="Web_Search_General",
+            func=ddg_tool.run,
+            description="Searches the live web for recent news, facts, current events, and live data."
+        ))
+    except Exception:
+        pass
+
+    # Tool 2: Deep Encyclopedia Search (Wikipedia)
+    try:
+        wiki = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper(top_k_results=2, doc_content_chars_max=1000))
+        tools.append(Tool(
+            name="Wikipedia_Knowledge_Base",
+            func=wiki.run,
+            description="Useful for looking up detailed historical, scientific, geographical, and technical facts."
+        ))
+    except Exception:
+        pass
+
+    return tools
+
+# Initialize Agent Tools
+search_tools = create_multi_search_tools()
 
 
-# CHAT UI WITH WEB SEARCH + VISION + MEMORY
+# ==========================================
+# CHAT UI
+# ==========================================
 @app.route('/')
 def index():
     return render_template_string('''
@@ -36,13 +64,13 @@ def index():
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <title>GPT-4.1-Mini Assistant</title>
+            <title>GPT-4.1-Mini Deep Search Assistant</title>
             <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 750px; margin: 30px auto; padding: 0 20px; color: #333; }
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 30px auto; padding: 0 20px; color: #333; }
                 #chat-box { border: 1px solid #e1e1e1; height: 500px; overflow-y: auto; padding: 20px; border-radius: 12px; margin-bottom: 15px; background: #fafafa; }
                 .message { margin-bottom: 20px; }
                 .user { font-weight: bold; color: #0066cc; }
-                .assistant { color: #111; background: #ffffff; padding: 12px 16px; border-radius: 8px; border: 1px solid #e0e0e0; margin-top: 5px; white-space: pre-wrap; line-height: 1.5; }
+                .assistant { color: #111; background: #ffffff; padding: 14px 18px; border-radius: 8px; border: 1px solid #e0e0e0; margin-top: 5px; white-space: pre-wrap; line-height: 1.5; }
                 .preview-img { max-width: 250px; display: block; margin-top: 8px; border-radius: 6px; border: 1px solid #ccc; }
                 .controls { display: flex; gap: 10px; align-items: center; }
                 input[type="text"] { flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
@@ -51,15 +79,15 @@ def index():
                 #image-preview-container { margin-bottom: 10px; display: none; align-items: center; gap: 10px; }
                 .clear-btn { background: #666; }
                 .clear-btn:hover { background: #444; }
-                .search-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.9em; margin-bottom: 10px; }
+                .search-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.9em; margin-bottom: 10px; font-weight: 500; }
             </style>
         </head>
         <body>
-            <h2>GPT-4.1-Mini Assistant (Vision + Web Search)</h2>
+            <h2>GPT-4.1-Mini Assistant (Vision + Multi-Source Search Engine)</h2>
             
             <div class="search-toggle">
                 <input type="checkbox" id="web-search-check" checked>
-                <label for="web-search-check">Enable Web Search (fetches real-time internet data)</label>
+                <label for="web-search-check">Enable Multi-Source Web Fetching (Queries multiple tools behind the scenes)</label>
             </div>
 
             <div id="chat-box"></div>
@@ -183,6 +211,9 @@ def index():
     ''')
 
 
+# ==========================================
+# CHAT ENDPOINT WITH AGENT & VISION
+# ==========================================
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.get_json()
@@ -192,7 +223,7 @@ def chat():
     messages = data.get('messages', [])
     enable_web_search = data.get('enable_web_search', True)
 
-    # 1. Extract query for search context
+    # 1. Extract query for multi-source search
     last_user_message = messages[-1]['content']
     search_query = ""
     
@@ -203,30 +234,35 @@ def chat():
     elif isinstance(last_user_message, str):
         search_query = last_user_message
 
-    # 2. Perform live web fetch
-    search_context = ""
-    if enable_web_search and search_query.strip():
-        search_results = perform_web_search(search_query.strip())
-        search_context = f"\n\n[LIVE WEB SEARCH RESULTS FOR: '{search_query.strip()}']\n{search_results}\n[END SEARCH RESULTS]\n"
+    # 2. Gather context from Multi-Search Tools if search is enabled
+    fetched_context = ""
+    if enable_web_search and search_query.strip() and len(search_tools) > 0:
+        try:
+            # Query web search and knowledge bases in parallel/sequence
+            for tool in search_tools:
+                result = tool.func(search_query.strip())
+                if result:
+                    fetched_context += f"\n--- Source ({tool.name}) ---\n{result}\n"
+        except Exception as e:
+            fetched_context = f"Search tools encountered an issue: {str(e)}"
 
     # 3. System Instruction
     system_instruction = {
         "role": "system",
         "content": (
             "You are an exceptionally intelligent, concise, and direct AI assistant powered by gpt-4.1-mini. "
-            "1. When provided with an image, IMMEDIATELY solve, answer, or analyze its content. Do NOT describe what the image looks like. Give the final answer directly.\n"
-            "2. You are provided with live search results when available. Use them to provide up-to-date, accurate answers.\n"
-            "3. If asked about previous topics, photos, or text in the conversation, refer back to the conversation history provided."
+            "1. When provided with an image, IMMEDIATELY solve, answer, or analyze its content directly. Do NOT describe what the image looks like.\n"
+            "2. Cross-reference all fetched search data below to ensure maximum accuracy before answering.\n"
+            "3. Maintain full conversation context using history provided."
         )
     }
 
-    if search_context:
-        system_instruction["content"] += f"\nRelevant context from web search:\n{search_context}"
+    if fetched_context:
+        system_instruction["content"] += f"\n\n[FETCHED MULTI-SOURCE SEARCH CONTEXT]\n{fetched_context}\n[END CONTEXT]"
 
     api_messages = [system_instruction] + messages
 
     try:
-        # Calls model gpt-4.1-mini
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=api_messages,

@@ -5,4 +5,5 @@ langchain-community
 langchain-openai
 duckduckgo-search
 wikipedia
+tavily-python
 gunicorn

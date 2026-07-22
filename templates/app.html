@@ -3,7 +3,6 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
     <title>Vision ChatGPT</title>
 
     <style>
@@ -14,152 +13,170 @@
 
       body {
         margin: 0;
-
         height: 100vh;
-
         background: #343541;
-
         display: flex;
-
         justify-content: center;
-
         align-items: center;
-
         color: white;
       }
 
       .chat {
         width: 95%;
-
         max-width: 900px;
-
         height: 95vh;
-
         background: #202123;
-
         border-radius: 12px;
-
         display: flex;
-
         flex-direction: column;
-
         overflow: hidden;
       }
 
       .header {
         background: #111827;
-
         padding: 20px;
-
         text-align: center;
-
         font-size: 24px;
-
         font-weight: bold;
       }
 
       #messages {
         flex: 1;
-
         overflow-y: auto;
-
         padding: 20px;
       }
 
       .message {
         padding: 12px;
-
         margin-bottom: 15px;
-
         border-radius: 10px;
-
         max-width: 80%;
-
         white-space: pre-wrap;
       }
 
       .user {
         background: #2563eb;
-
         margin-left: auto;
       }
 
       .ai {
         background: #444654;
-
         margin-right: auto;
       }
 
-      .message img {
+      .image-gallery {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
         margin-top: 10px;
+      }
 
-        width: 250px;
-
+      .image-gallery img {
+        width: 120px;
+        height: 120px;
+        object-fit: cover;
         border-radius: 8px;
+      }
+
+      /* Preview Container */
+      #preview {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 20px;
+        max-height: 140px;
+        overflow-y: auto;
+        background: #1a1b1e;
+      }
+
+      .preview-item {
+        position: relative;
+        display: inline-block;
+      }
+
+      .preview-item img {
+        width: 80px;
+        height: 80px;
+        object-fit: cover;
+        border-radius: 8px;
+        border: 1px solid #444;
+      }
+
+      .remove-btn {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        background: #ef4444;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        font-size: 12px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
       }
 
       .input-area {
         background: #111827;
-
         padding: 15px;
-
         display: flex;
-
         gap: 10px;
-
-        align-items: center;
+        align-items: flex-end;
       }
 
+      /* #1 Auto-wrapping & Scrolling Textarea */
       textarea {
         flex: 1;
-
-        height: 55px;
-
+        min-height: 50px;
+        max-height: 150px; /* Limits size and enables scrollbar beyond 150px */
         resize: none;
-
         border-radius: 8px;
-
         border: none;
-
         padding: 12px;
-
         font-size: 16px;
+        line-height: 1.4;
+        overflow-y: auto;
+        outline: none;
       }
 
-      button {
+      button, .file-label, .mic-btn {
         background: #10a37f;
-
         color: white;
-
         border: none;
-
         border-radius: 8px;
-
-        padding: 15px 20px;
-
+        padding: 14px 18px;
         cursor: pointer;
-
         font-size: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
 
-      button:hover {
+      button:hover, .file-label:hover, .mic-btn:hover {
         background: #0d8f6f;
       }
 
+      .mic-btn.recording {
+        background: #ef4444 !important;
+        animation: pulse 1.2s infinite;
+      }
+
+      @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+      }
+
       input[type="file"] {
-        color: white;
-
-        width: 150px;
+        display: none;
       }
 
-      #preview {
-        padding: 10px 20px;
-      }
-
-      #preview img {
-        width: 100px;
-
-        border-radius: 8px;
+      .file-label {
+        font-size: 18px;
       }
     </style>
   </head>
@@ -170,66 +187,190 @@
 
       <div id="messages"></div>
 
+      <!-- Preview container for up to 10 photos -->
       <div id="preview"></div>
 
       <div class="input-area">
+        <label for="file" class="file-label" title="Attach Images (Max 10)">📎</label>
+        <input id="file" type="file" accept="image/*" multiple />
+
         <textarea
           id="text"
-          placeholder="Ask anything or upload an image..."
+          placeholder="Ask anything or paste/upload images..."
+          rows="1"
         ></textarea>
 
-        <input id="file" type="file" accept="image/*" />
+        <!-- Voice-to-text mic button -->
+        <button type="button" id="mic-btn" class="mic-btn" onclick="toggleVoiceInput()" title="Voice Input">🎤</button>
 
-        <button onclick="send()">Send</button>
+        <button id="send-btn" onclick="send()">Send</button>
       </div>
     </div>
 
     <script>
-      let imageFile = null;
-      let isThinking = false; // Flag to lock/unlock user input
+      let selectedFiles = []; // Holds attached images (up to 10)
+      let isThinking = false;
+      let recognition = null;
+      let isRecording = false;
 
+      const maxImages = 10;
       const messages = document.getElementById("messages");
       const fileInput = document.getElementById("file");
       const preview = document.getElementById("preview");
       const textarea = document.getElementById("text");
-      const sendBtn = document.querySelector("button");
+      const sendBtn = document.getElementById("send-btn");
+      const micBtn = document.getElementById("mic-btn");
 
+      // -------------------------------------------------------------
+      // #1 TEXTAREA AUTO-RESIZE AND AUTO-SCROLL
+      // -------------------------------------------------------------
+      textarea.addEventListener("input", function () {
+        this.style.height = "auto";
+        this.style.height = Math.min(this.scrollHeight, 150) + "px";
+        this.scrollTop = this.scrollHeight; // Auto-scrolls down while typing
+      });
+
+      // -------------------------------------------------------------
+      // #2 MULTIPLE IMAGE HANDLING (UPLOAD & PASTE - UP TO 10)
+      // -------------------------------------------------------------
       fileInput.onchange = function () {
         if (isThinking) return;
-        imageFile = this.files[0];
-        showPreview();
+        addFiles(Array.from(this.files));
+        this.value = ""; // Reset file input
       };
 
       document.addEventListener("paste", function (event) {
-        if (isThinking) return; // Prevent pasting while processing
+        if (isThinking) return;
         let items = event.clipboardData.items;
+        let pastedFiles = [];
 
         for (let item of items) {
           if (item.type.startsWith("image")) {
-            imageFile = item.getAsFile();
-            showPreview();
+            pastedFiles.push(item.getAsFile());
           }
+        }
+
+        if (pastedFiles.length > 0) {
+          addFiles(pastedFiles);
         }
       });
 
-      function showPreview() {
+      function addFiles(files) {
+        for (let file of files) {
+          if (selectedFiles.length >= maxImages) {
+            alert(`Maximum of ${maxImages} images allowed.`);
+            break;
+          }
+          selectedFiles.push(file);
+        }
+        renderPreviews();
+      }
+
+      function removeFile(index) {
+        if (isThinking) return;
+        selectedFiles.splice(index, 1);
+        renderPreviews();
+      }
+
+      function renderPreviews() {
         preview.innerHTML = "";
-        if (imageFile) {
+        selectedFiles.forEach((file, index) => {
+          let container = document.createElement("div");
+          container.className = "preview-item";
+
           let img = document.createElement("img");
-          img.src = URL.createObjectURL(imageFile);
-          preview.appendChild(img);
+          img.src = URL.createObjectURL(file);
+
+          let removeBtn = document.createElement("button");
+          removeBtn.className = "remove-btn";
+          removeBtn.textContent = "✕";
+          removeBtn.onclick = () => removeFile(index);
+
+          container.appendChild(img);
+          container.appendChild(removeBtn);
+          preview.appendChild(container);
+        });
+      }
+
+      // -------------------------------------------------------------
+      // #3 VOICE-TO-TEXT INPUT (WEB SPEECH API)
+      // -------------------------------------------------------------
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        recognition.onresult = function (event) {
+          let transcript = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          textarea.value = transcript;
+          // Trigger auto-resize & scroll for speech input
+          textarea.dispatchEvent(new Event("input"));
+        };
+
+        recognition.onerror = function (event) {
+          console.error("Speech Recognition Error:", event.error);
+          stopRecording();
+        };
+
+        recognition.onend = function () {
+          stopRecording();
+        };
+      } else {
+        micBtn.style.display = "none"; // Hide mic button if unsupported by browser
+      }
+
+      function toggleVoiceInput() {
+        if (isThinking) return;
+        if (!recognition) {
+          alert("Speech Recognition is not supported in this browser.");
+          return;
+        }
+
+        if (isRecording) {
+          stopRecording();
+        } else {
+          startRecording();
         }
       }
 
-      function addMessage(text, className, image = null) {
+      function startRecording() {
+        isRecording = true;
+        micBtn.classList.add("recording");
+        micBtn.textContent = "🛑";
+        recognition.start();
+      }
+
+      function stopRecording() {
+        isRecording = false;
+        micBtn.classList.remove("recording");
+        micBtn.textContent = "🎤";
+        if (recognition) recognition.stop();
+      }
+
+      // -------------------------------------------------------------
+      // CHAT LOGIC & LOCK INPUTS WHEN THINKING
+      // -------------------------------------------------------------
+      function addMessage(text, className, files = []) {
         let div = document.createElement("div");
         div.className = "message " + className;
         div.textContent = text;
 
-        if (image) {
-          let img = document.createElement("img");
-          img.src = URL.createObjectURL(image);
-          div.appendChild(img);
+        if (files.length > 0) {
+          let gallery = document.createElement("div");
+          gallery.className = "image-gallery";
+
+          files.forEach((file) => {
+            let img = document.createElement("img");
+            img.src = URL.createObjectURL(file);
+            gallery.appendChild(img);
+          });
+
+          div.appendChild(gallery);
         }
 
         messages.appendChild(div);
@@ -237,41 +378,42 @@
         return div;
       }
 
-      // Utility function to enable/disable UI controls
       function setInputState(disabled) {
         isThinking = disabled;
         textarea.disabled = disabled;
         fileInput.disabled = disabled;
         sendBtn.disabled = disabled;
+        micBtn.disabled = disabled;
+
         sendBtn.style.opacity = disabled ? "0.5" : "1";
         sendBtn.style.cursor = disabled ? "not-allowed" : "pointer";
+
+        if (disabled && isRecording) {
+          stopRecording();
+        }
       }
 
       async function send() {
-        // If already processing or both fields are empty, block submission
         if (isThinking) return;
 
         let text = textarea.value.trim();
-        if (!text && !imageFile) return;
+        if (!text && selectedFiles.length === 0) return;
 
-        // 1. Lock the inputs immediately
         setInputState(true);
 
-        // 2. Display the user's message
-        addMessage(text, "user", imageFile);
+        // Display user message with attached photos
+        addMessage(text, "user", [...selectedFiles]);
 
         let form = new FormData();
         form.append("message", text);
-        if (imageFile) {
-          form.append("image", imageFile);
-        }
+        selectedFiles.forEach((file) => form.append("images", file));
 
-        // Reset input fields
+        // Reset UI controls
         textarea.value = "";
-        imageFile = null;
+        textarea.style.height = "50px";
+        selectedFiles = [];
         preview.innerHTML = "";
 
-        // 3. Show a temporary loading indicator
         let thinkingDiv = addMessage("Thinking...", "ai");
 
         try {
@@ -282,17 +424,14 @@
 
           let data = await response.json();
 
-          // Replace "Thinking..." with actual reply
           if (response.ok) {
             thinkingDiv.textContent = data.reply;
           } else {
-            thinkingDiv.textContent =
-              "Error: " + (data.error || "Failed to generate reply.");
+            thinkingDiv.textContent = "Error: " + (data.error || "Failed to generate response.");
           }
         } catch (err) {
           thinkingDiv.textContent = "Error sending message. Please try again.";
         } finally {
-          // 4. Unlock inputs when complete (whether success or error)
           setInputState(false);
           textarea.focus();
         }

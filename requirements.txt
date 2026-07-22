@@ -1,4 +1,5 @@
 flask
+jinja2
 openai
 langchain
 langchain-community

@@ -60,6 +60,18 @@ def create_multi_search_tools():
     except Exception:
         pass
 
+    # Tool 4: SerpApi Google Search (requires SERPAPI_API_KEY in Render Environment)
+    try:
+        from langchain_community.utilities import SerpAPIWrapper
+        serp_tool = SerpAPIWrapper()
+        tools.append(Tool(
+            name="SerpApi_Google_Search",
+            func=serp_tool.run,
+            description="Searches live Google results using SerpApi for accurate, real-time web facts."
+        ))
+    except Exception:
+        pass
+
     return tools
 
 # Initialize Agent Tools

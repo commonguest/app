@@ -6,4 +6,5 @@ langchain-openai
 duckduckgo-search
 wikipedia
 tavily-python
+google-search-results
 gunicorn

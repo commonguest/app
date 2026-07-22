@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vision ChatGPT</title>
 
+    <!-- jsPDF Library for Client-Side PDF Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
     <style>
       * {
         box-sizing: border-box;
@@ -46,12 +49,18 @@
         padding: 20px;
       }
 
+      .message-wrapper {
+        display: flex;
+        flex-direction: column;
+        margin-bottom: 15px;
+      }
+
       .message {
         padding: 12px;
-        margin-bottom: 15px;
         border-radius: 10px;
         max-width: 80%;
         white-space: pre-wrap;
+        word-wrap: break-word;
       }
 
       .user {
@@ -62,6 +71,66 @@
       .ai {
         background: #444654;
         margin-right: auto;
+      }
+
+      /* Infinity Loading Animation Styling */
+      .infinity-loader-container {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 10px;
+      }
+
+      .infinity-svg {
+        width: 42px;
+        height: 22px;
+      }
+
+      .infinity-bg {
+        fill: none;
+        stroke: rgba(255, 255, 255, 0.2);
+        stroke-width: 3.5;
+      }
+
+      .infinity-light {
+        fill: none;
+        stroke: #60a5fa;
+        stroke-width: 3.5;
+        stroke-dasharray: 45, 120;
+        stroke-linecap: round;
+        animation: infinity-glow 1.4s linear infinite;
+        filter: drop-shadow(0 0 5px #60a5fa);
+      }
+
+      @keyframes infinity-glow {
+        0% { stroke-dashoffset: 0; }
+        100% { stroke-dashoffset: -165; }
+      }
+
+      .action-buttons {
+        display: flex;
+        gap: 8px;
+        margin-top: 6px;
+        margin-right: auto;
+      }
+
+      .action-btn {
+        background: #343541;
+        color: #d1d5db;
+        border: 1px solid #4b5563;
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.2s, color 0.2s;
+      }
+
+      .action-btn:hover {
+        background: #4b5563;
+        color: white;
       }
 
       .image-gallery {
@@ -206,7 +275,7 @@
       let isThinking = false;
       let recognition = null;
       let isRecording = false;
-      let finalTranscript = ""; // Persistent transcript storage to prevent resets on pauses
+      let finalTranscript = "";
 
       const maxImages = 10;
       const messages = document.getElementById("messages");
@@ -223,7 +292,6 @@
       }
 
       textarea.addEventListener("input", function() {
-        // If the user manually edits the text field, sync our voice state
         finalTranscript = textarea.value;
         adjustTextareaSize();
       });
@@ -288,7 +356,7 @@
       }
 
       // -------------------------------------------------------------
-      // SPEECH RECOGNITION WITH ACCUMULATIVE SPEECH & CONTINUOUS PAUSES
+      // SPEECH RECOGNITION LOGIC
       // -------------------------------------------------------------
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -302,21 +370,16 @@
 
           let formatted = text.trim();
 
-          // Spoken command substitutions
           formatted = formatted
             .replace(/\b(comma)\b/gi, ",")
             .replace(/\b(period|full stop)\b/gi, ".")
             .replace(/\b(question mark)\b/gi, "?")
             .replace(/\b(exclamation mark|exclamation point)\b/gi, "!");
 
-          // Auto-insert commas before transitional words
           formatted = formatted.replace(/([^,\.\?!])\s+(however|but|although|meanwhile|therefore)\b/gi, "$1, $2");
-
-          // Clean up multiple spaces and spaces before punctuation
           formatted = formatted.replace(/\s+/g, " ");
           formatted = formatted.replace(/\s+([,\.\?!])/g, "$1");
 
-          // Capitalize first letter of sentences
           formatted = formatted.replace(/(^\s*|[\.\?!]\s+)([a-z])/g, (match, separator, char) => {
             return separator + char.toUpperCase();
           });
@@ -329,15 +392,12 @@
 
           for (let i = event.resultIndex; i < event.results.length; ++i) {
             if (event.results[i].isFinal) {
-              // Append finalized words to our persistent transcript buffer
               finalTranscript += " " + event.results[i][0].transcript;
             } else {
-              // Temporary words actively being spoken
               interimTranscript += event.results[i][0].transcript;
             }
           }
 
-          // Combine saved speech history + active live speech
           let combinedText = finalTranscript + " " + interimTranscript;
           let formattedText = formatGrammarAndPunctuation(combinedText);
 
@@ -352,7 +412,6 @@
           }
         };
 
-        // Auto-restart recognition if browser stops it due to long silence while mic is active
         recognition.onend = function () {
           if (isRecording) {
             recognition.start();
@@ -378,8 +437,7 @@
 
       function startRecording() {
         isRecording = true;
-        // Seed our persistent transcript with existing box content
-        finalTranscript = textarea.value; 
+        finalTranscript = textarea.value;
         micBtn.classList.add("recording");
         micBtn.textContent = "🛑";
         recognition.start();
@@ -391,7 +449,6 @@
         micBtn.textContent = "🎤";
         if (recognition) recognition.stop();
 
-        // Finalize grammar pass on complete text block
         if (textarea.value.trim()) {
           let formatted = formatGrammarAndPunctuation(textarea.value);
           if (!/[,\.\?!]$/.test(formatted)) {
@@ -404,12 +461,75 @@
       }
 
       // -------------------------------------------------------------
+      // EXPORT & COPY RESPONSE ACTIONS
+      // -------------------------------------------------------------
+      function copyToClipboard(text, btnElement) {
+        navigator.clipboard.writeText(text).then(() => {
+          const originalText = btnElement.innerHTML;
+          btnElement.innerHTML = "✓ Copied!";
+          setTimeout(() => {
+            btnElement.innerHTML = originalText;
+          }, 2000);
+        }).catch(err => {
+          alert("Failed to copy text.");
+        });
+      }
+
+      function downloadAsTXT(text) {
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `response_${Date.now()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      function downloadAsPDF(text) {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        const splitText = doc.splitTextToSize(text, 180);
+        let y = 15;
+        const pageHeight = doc.internal.pageSize.height;
+
+        for (let i = 0; i < splitText.length; i++) {
+          if (y > pageHeight - 15) {
+            doc.addPage();
+            y = 15;
+          }
+          doc.text(splitText[i], 15, y);
+          y += 7;
+        }
+
+        doc.save(`response_${Date.now()}.pdf`);
+      }
+
+      // -------------------------------------------------------------
       // CHAT SUBMISSION LOGIC
       // -------------------------------------------------------------
-      function addMessage(text, className, files = []) {
+      function addMessage(text, className, files = [], isAiResponse = false, isLoader = false) {
+        let wrapper = document.createElement("div");
+        wrapper.className = "message-wrapper";
+
         let div = document.createElement("div");
         div.className = "message " + className;
-        div.textContent = text;
+
+        if (isLoader) {
+          // Transparent SVG infinity loader with soft light animation
+          div.innerHTML = `
+            <div class="infinity-loader-container">
+              <svg class="infinity-svg" viewBox="0 0 100 50">
+                <path class="infinity-bg" d="M 30,25 C 10,25 10,10 30,10 C 50,10 50,40 70,40 C 90,40 90,25 70,25 C 50,25 50,10 30,10 C 10,10 10,40 30,40 C 50,40 50,25 70,25" />
+                <path class="infinity-light" d="M 30,25 C 10,25 10,10 30,10 C 50,10 50,40 70,40 C 90,40 90,25 70,25 C 50,25 50,10 30,10 C 10,10 10,40 30,40 C 50,40 50,25 70,25" />
+              </svg>
+            </div>
+          `;
+        } else {
+          div.textContent = text;
+        }
 
         if (files.length > 0) {
           let gallery = document.createElement("div");
@@ -424,9 +544,36 @@
           div.appendChild(gallery);
         }
 
-        messages.appendChild(div);
+        wrapper.appendChild(div);
+
+        if (isAiResponse) {
+          let actions = document.createElement("div");
+          actions.className = "action-buttons";
+
+          let copyBtn = document.createElement("button");
+          copyBtn.className = "action-btn";
+          copyBtn.innerHTML = "📋 Copy";
+          copyBtn.onclick = () => copyToClipboard(div.textContent, copyBtn);
+
+          let txtBtn = document.createElement("button");
+          txtBtn.className = "action-btn";
+          txtBtn.innerHTML = "📄 .TXT";
+          txtBtn.onclick = () => downloadAsTXT(div.textContent);
+
+          let pdfBtn = document.createElement("button");
+          pdfBtn.className = "action-btn";
+          pdfBtn.innerHTML = "📕 .PDF";
+          pdfBtn.onclick = () => downloadAsPDF(div.textContent);
+
+          actions.appendChild(copyBtn);
+          actions.appendChild(txtBtn);
+          actions.appendChild(pdfBtn);
+          wrapper.appendChild(actions);
+        }
+
+        messages.appendChild(wrapper);
         messages.scrollTop = messages.scrollHeight;
-        return div;
+        return { wrapper, div };
       }
 
       function setInputState(disabled) {
@@ -459,12 +606,13 @@
         selectedFiles.forEach((file) => form.append("images", file));
 
         textarea.value = "";
-        finalTranscript = ""; // Reset persistent transcript buffer after sending
+        finalTranscript = "";
         textarea.style.height = "50px";
         selectedFiles = [];
         preview.innerHTML = "";
 
-        let thinkingDiv = addMessage("Thinking...", "ai");
+        // Display animated infinity loader while generating response
+        let thinkingMsg = addMessage("", "ai", [], false, true);
 
         try {
           let response = await fetch("/chat", {
@@ -474,13 +622,16 @@
 
           let data = await response.json();
 
+          thinkingMsg.wrapper.remove();
+
           if (response.ok) {
-            thinkingDiv.textContent = data.reply;
+            addMessage(data.reply, "ai", [], true);
           } else {
-            thinkingDiv.textContent = "Error: " + (data.error || "Failed to generate response.");
+            addMessage("Error: " + (data.error || "Failed to generate response."), "ai", [], false);
           }
         } catch (err) {
-          thinkingDiv.textContent = "Error sending message. Please try again.";
+          thinkingMsg.wrapper.remove();
+          addMessage("Error sending message. Please try again.", "ai", [], false);
         } finally {
           setInputState(false);
           textarea.focus();

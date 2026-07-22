@@ -7,7 +7,7 @@ from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
-from langchain.agents import initialize_agent, AgentType, Tool
+from langchain_core.tools import Tool
 
 app = Flask(__name__)
 

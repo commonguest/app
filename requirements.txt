@@ -1,4 +1,4 @@
 flask
-gunicorn
 openai
-python-dotenv
+duckduckgo-search
+gunicorn

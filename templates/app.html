@@ -78,7 +78,6 @@
         border-radius: 8px;
       }
 
-      /* Preview Container */
       #preview {
         display: flex;
         flex-wrap: wrap;
@@ -128,11 +127,10 @@
         align-items: flex-end;
       }
 
-      /* #1 Auto-wrapping & Scrolling Textarea */
       textarea {
         flex: 1;
         min-height: 50px;
-        max-height: 150px; /* Limits size and enables scrollbar beyond 150px */
+        max-height: 150px;
         resize: none;
         border-radius: 8px;
         border: none;
@@ -186,8 +184,6 @@
       <div class="header">Vision ChatGPT</div>
 
       <div id="messages"></div>
-
-      <!-- Preview container for up to 10 photos -->
       <div id="preview"></div>
 
       <div class="input-area">
@@ -200,15 +196,13 @@
           rows="1"
         ></textarea>
 
-        <!-- Voice-to-text mic button -->
         <button type="button" id="mic-btn" class="mic-btn" onclick="toggleVoiceInput()" title="Voice Input">🎤</button>
-
         <button id="send-btn" onclick="send()">Send</button>
       </div>
     </div>
 
     <script>
-      let selectedFiles = []; // Holds attached images (up to 10)
+      let selectedFiles = [];
       let isThinking = false;
       let recognition = null;
       let isRecording = false;
@@ -221,22 +215,20 @@
       const sendBtn = document.getElementById("send-btn");
       const micBtn = document.getElementById("mic-btn");
 
-      // -------------------------------------------------------------
-      // #1 TEXTAREA AUTO-RESIZE AND AUTO-SCROLL
-      // -------------------------------------------------------------
-      textarea.addEventListener("input", function () {
-        this.style.height = "auto";
-        this.style.height = Math.min(this.scrollHeight, 150) + "px";
-        this.scrollTop = this.scrollHeight; // Auto-scrolls down while typing
-      });
+      // Dynamic resize & scrolling function reusable by typing & speech events
+      function adjustTextareaSize() {
+        textarea.style.height = "auto";
+        textarea.style.height = Math.min(textarea.scrollHeight, 150) + "px";
+        textarea.scrollTop = textarea.scrollHeight;
+      }
 
-      // -------------------------------------------------------------
-      // #2 MULTIPLE IMAGE HANDLING (UPLOAD & PASTE - UP TO 10)
-      // -------------------------------------------------------------
+      textarea.addEventListener("input", adjustTextareaSize);
+
+      // File uploading and previews
       fileInput.onchange = function () {
         if (isThinking) return;
         addFiles(Array.from(this.files));
-        this.value = ""; // Reset file input
+        this.value = "";
       };
 
       document.addEventListener("paste", function (event) {
@@ -293,7 +285,7 @@
       }
 
       // -------------------------------------------------------------
-      // #3 VOICE-TO-TEXT INPUT (WEB SPEECH API)
+      // VOICE-TO-TEXT WITH AUTOMATIC GRAMMAR, PUNCTUATION & SCROLLING
       // -------------------------------------------------------------
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -302,14 +294,54 @@
         recognition.continuous = true;
         recognition.interimResults = true;
 
-        recognition.onresult = function (event) {
-          let transcript = "";
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            transcript += event.results[i][0].transcript;
+        // Formats raw transcript into capitalized sentences with commas and periods
+        function formatGrammarAndPunctuation(text) {
+          if (!text) return "";
+
+          let formatted = text.trim();
+
+          // Spoken words punctuation translation
+          formatted = formatted
+            .replace(/\b(comma)\b/gi, ",")
+            .replace(/\b(period|full stop)\b/gi, ".")
+            .replace(/\b(question mark)\b/gi, "?")
+            .replace(/\b(exclamation mark|exclamation point)\b/gi, "!");
+
+          // Auto-insert commas before transitional/connecting conjunctions if missing
+          formatted = formatted.replace(/([^,\.\?!])\s+(however|but|although|meanwhile|therefore)\b/gi, "$1, $2");
+
+          // Clean duplicate spaces and fix punctuation spacing
+          formatted = formatted.replace(/\s+/g, " ");
+          formatted = formatted.replace(/\s+([,\.\?!])/g, "$1");
+
+          // Ensure proper sentence capitalization
+          formatted = formatted.replace(/(^\s*|[[\.\?!]\s+)([a-z])/g, (match, separator, char) => {
+            return separator + char.toUpperCase();
+          });
+
+          // Ensure ending punctuation if continuous statement ends
+          if (!/[,\.\?!]$/.test(formatted)) {
+            formatted += ".";
           }
-          textarea.value = transcript;
-          // Trigger auto-resize & scroll for speech input
-          textarea.dispatchEvent(new Event("input"));
+
+          return formatted;
+        }
+
+        recognition.onresult = function (event) {
+          let rawTranscript = "";
+
+          for (let i = 0; i < event.results.length; i++) {
+            rawTranscript += event.results[i][0].transcript + " ";
+          }
+
+          // Apply grammar and punctuation rules
+          let cleanTranscript = formatGrammarAndPunctuation(rawTranscript);
+
+          // Update text value
+          textarea.value = cleanTranscript;
+
+          // Force wrap update & dynamic scroll to bottom while speaking
+          adjustTextareaSize();
         };
 
         recognition.onerror = function (event) {
@@ -321,7 +353,7 @@
           stopRecording();
         };
       } else {
-        micBtn.style.display = "none"; // Hide mic button if unsupported by browser
+        micBtn.style.display = "none";
       }
 
       function toggleVoiceInput() {
@@ -350,10 +382,11 @@
         micBtn.classList.remove("recording");
         micBtn.textContent = "🎤";
         if (recognition) recognition.stop();
+        adjustTextareaSize();
       }
 
       // -------------------------------------------------------------
-      // CHAT LOGIC & LOCK INPUTS WHEN THINKING
+      // SEND CHAT COMMANDS & LOCK CONTROLS WHILE THINKING
       // -------------------------------------------------------------
       function addMessage(text, className, files = []) {
         let div = document.createElement("div");
@@ -401,14 +434,12 @@
 
         setInputState(true);
 
-        // Display user message with attached photos
         addMessage(text, "user", [...selectedFiles]);
 
         let form = new FormData();
         form.append("message", text);
         selectedFiles.forEach((file) => form.append("images", file));
 
-        // Reset UI controls
         textarea.value = "";
         textarea.style.height = "50px";
         selectedFiles = [];

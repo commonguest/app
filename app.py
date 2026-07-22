@@ -87,7 +87,6 @@ def chat():
     if not user_text and not image_files:
         return jsonify({"error": "No message or image provided."}), 400
 
-    # Enforce max 10 images server-side
     if len(image_files) > 10:
         return jsonify({"error": "Maximum of 10 images allowed per request."}), 400
 

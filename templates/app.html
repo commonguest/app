@@ -1,103 +1,754 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GEOINT & Metadata Analysis</title>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vision & GEOINT ChatGPT</title>
+
+    <!-- jsPDF Library for Client-Side PDF Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #f4f6f8; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h2 { margin-top: 0; color: #333; }
-        .form-group { margin-bottom: 15px; }
-        label { font-weight: bold; display: block; margin-bottom: 5px; }
-        textarea { width: 100%; height: 80px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        input[type="file"] { margin-top: 5px; }
-        button { background: #0066cc; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }
-        button:hover { background: #0052a3; }
-        #output { margin-top: 20px; padding: 15px; border-radius: 4px; background: #eef2f5; white-space: pre-wrap; font-family: monospace; }
-        .map-link { margin-top: 10px; display: inline-block; background: #28a745; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; }
-    </style>
-</head>
-<body>
+      * {
+        box-sizing: border-box;
+        font-family: Arial, Helvetica, sans-serif;
+      }
 
-<div class="container">
-    <h2>GEOINT & Image Metadata Inspector</h2>
-    
-    <form id="uploadForm">
-        <div class="form-group">
-            <label for="message">Prompt / Query:</label>
-            <textarea id="message" name="message" placeholder="Ask about the image or enter a domain lookup query..."></textarea>
-        </div>
+      body {
+        margin: 0;
+        height: 100vh;
+        background: #343541;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        color: white;
+      }
 
-        <div class="form-group">
-            <label for="images">Select Image(s):</label>
-            <!-- Note: name="images" matches request.files.getlist('images') in Flask -->
-            <input type="file" id="images" name="images" accept="image/*" multiple>
-        </div>
+      .chat {
+        width: 95%;
+        max-width: 900px;
+        height: 95vh;
+        background: #202123;
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
 
-        <button type="submit" id="submitBtn">Analyze</button>
-    </form>
+      .header {
+        background: #111827;
+        padding: 20px;
+        text-align: center;
+        font-size: 24px;
+        font-weight: bold;
+      }
 
-    <div id="output" style="display: none;"></div>
-    <div id="mapLinkContainer"></div>
-</div>
+      #messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+      }
 
-<script>
-document.getElementById('uploadForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    
-    const submitBtn = document.getElementById('submitBtn');
-    const outputDiv = document.getElementById('output');
-    const mapContainer = document.getElementById('mapLinkContainer');
-    
-    submitBtn.disabled = true;
-    submitBtn.innerText = 'Analyzing...';
-    outputDiv.style.display = 'block';
-    outputDiv.innerText = 'Processing image metadata and running analysis...';
-    mapContainer.innerHTML = '';
+      .message-wrapper {
+        display: flex;
+        flex-direction: column;
+        margin-bottom: 15px;
+      }
 
-    // Create FormData to handle text + file uploads simultaneously
-    const formData = new FormData();
-    const textInput = document.getElementById('message').value;
-    const fileInput = document.getElementById('images');
+      .message {
+        padding: 12px;
+        border-radius: 10px;
+        max-width: 85%;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
 
-    formData.append('message', textInput);
-    
-    for (let i = 0; i < fileInput.files.length; i++) {
-        formData.append('images', fileInput.files[i]);
-    }
+      .user {
+        background: #2563eb;
+        margin-left: auto;
+      }
 
-    try {
-        const response = await fetch('/chat', {
-            method: 'POST',
-            body: formData // Content-Type header set automatically by browser
-        });
+      .ai {
+        background: #444654;
+        margin-right: auto;
+      }
 
-        const data = await response.json();
+      /* Metadata Card Formatting */
+      .exif-card {
+        margin-top: 10px;
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 13px;
+      }
 
-        if (response.ok) {
-            outputDiv.innerText = data.reply;
+      .exif-card h4 {
+        margin: 0 0 6px 0;
+        color: #38bdf8;
+      }
 
-            // Check if GPS coordinates were extracted to output a direct Google Maps button
-            if (data.exif_data && data.exif_data.length > 0) {
-                data.exif_data.forEach(item => {
-                    if (item.metadata && item.metadata.gps_coordinates) {
-                        const url = item.metadata.gps_coordinates.google_maps_url;
-                        mapContainer.innerHTML += `<a href="${url}" target="_blank" class="map-link">📍 View Extracted GPS Location on Google Maps</a>`;
-                    }
-                });
-            }
-        } else {
-            outputDiv.innerText = 'Error: ' + (data.error || 'Failed to analyze.');
+      .map-button {
+        display: inline-block;
+        margin-top: 8px;
+        background: #10b981;
+        color: white;
+        padding: 6px 12px;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: bold;
+        font-size: 13px;
+      }
+
+      .map-button:hover {
+        background: #059669;
+      }
+
+      /* Infinity Loading Animation Styling */
+      .infinity-loader-container {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 10px;
+      }
+
+      .infinity-svg {
+        width: 42px;
+        height: 22px;
+      }
+
+      .infinity-bg {
+        fill: none;
+        stroke: rgba(255, 255, 255, 0.2);
+        stroke-width: 3.5;
+      }
+
+      .infinity-light {
+        fill: none;
+        stroke: #60a5fa;
+        stroke-width: 3.5;
+        stroke-dasharray: 45, 120;
+        stroke-linecap: round;
+        animation: infinity-glow 1.4s linear infinite;
+        filter: drop-shadow(0 0 5px #60a5fa);
+      }
+
+      @keyframes infinity-glow {
+        0% {
+          stroke-dashoffset: 0;
         }
-    } catch (err) {
-        outputDiv.innerText = 'Network error: ' + err.message;
-    } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerText = 'Analyze';
-    }
-});
-</script>
+        100% {
+          stroke-dashoffset: -165;
+        }
+      }
 
-</body>
+      .action-buttons {
+        display: flex;
+        gap: 8px;
+        margin-top: 6px;
+        margin-right: auto;
+      }
+
+      .action-btn {
+        background: #343541;
+        color: #d1d5db;
+        border: 1px solid #4b5563;
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.2s, color 0.2s;
+      }
+
+      .action-btn:hover {
+        background: #4b5563;
+        color: white;
+      }
+
+      .image-gallery {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .image-gallery img {
+        width: 120px;
+        height: 120px;
+        object-fit: cover;
+        border-radius: 8px;
+      }
+
+      #preview {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 20px;
+        max-height: 140px;
+        overflow-y: auto;
+        background: #1a1b1e;
+      }
+
+      .preview-item {
+        position: relative;
+        display: inline-block;
+      }
+
+      .preview-item img {
+        width: 80px;
+        height: 80px;
+        object-fit: cover;
+        border-radius: 8px;
+        border: 1px solid #444;
+      }
+
+      .remove-btn {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        background: #ef4444;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        font-size: 12px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      }
+
+      .input-area {
+        background: #111827;
+        padding: 15px;
+        display: flex;
+        gap: 10px;
+        align-items: flex-end;
+      }
+
+      textarea {
+        flex: 1;
+        min-height: 50px;
+        max-height: 150px;
+        resize: none;
+        border-radius: 8px;
+        border: none;
+        padding: 12px;
+        font-size: 16px;
+        line-height: 1.4;
+        overflow-y: auto;
+        outline: none;
+      }
+
+      button,
+      .file-label,
+      .mic-btn {
+        background: #10a37f;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 14px 18px;
+        cursor: pointer;
+        font-size: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      button:hover,
+      .file-label:hover,
+      .mic-btn:hover {
+        background: #0d8f6f;
+      }
+
+      .mic-btn.recording {
+        background: #ef4444 !important;
+        animation: pulse 1.2s infinite;
+      }
+
+      @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+      }
+
+      input[type="file"] {
+        display: none;
+      }
+
+      .file-label {
+        font-size: 18px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="chat">
+      <div class="header">Vision ChatGPT</div>
+
+      <div id="messages"></div>
+      <div id="preview"></div>
+
+      <div class="input-area">
+        <label for="file" class="file-label" title="Attach Images (Max 10)">📎</label>
+        <!-- name="images" matches request.files.getlist('images') in Flask -->
+        <input id="file" name="images" type="file" accept="image/*" multiple />
+
+        <textarea
+          id="text"
+          name="message"
+          placeholder="Ask anything or paste/upload images..."
+          rows="1"
+        ></textarea>
+
+        <button
+          type="button"
+          id="mic-btn"
+          class="mic-btn"
+          onclick="toggleVoiceInput()"
+          title="Voice Input"
+        >
+          🎤
+        </button>
+        <button id="send-btn" onclick="send()">Send</button>
+      </div>
+    </div>
+
+    <script>
+      let selectedFiles = [];
+      let isThinking = false;
+      let recognition = null;
+      let isRecording = false;
+      let finalTranscript = "";
+
+      const maxImages = 10;
+      const messages = document.getElementById("messages");
+      const fileInput = document.getElementById("file");
+      const preview = document.getElementById("preview");
+      const textarea = document.getElementById("text");
+      const sendBtn = document.getElementById("send-btn");
+      const micBtn = document.getElementById("mic-btn");
+
+      function adjustTextareaSize() {
+        textarea.style.height = "auto";
+        textarea.style.height = Math.min(textarea.scrollHeight, 150) + "px";
+        textarea.scrollTop = textarea.scrollHeight;
+      }
+
+      textarea.addEventListener("input", function () {
+        finalTranscript = textarea.value;
+        adjustTextareaSize();
+      });
+
+      fileInput.onchange = function () {
+        if (isThinking) return;
+        addFiles(Array.from(this.files));
+        this.value = "";
+      };
+
+      document.addEventListener("paste", function (event) {
+        if (isThinking) return;
+        let items = event.clipboardData.items;
+        let pastedFiles = [];
+
+        for (let item of items) {
+          if (item.type.startsWith("image")) {
+            pastedFiles.push(item.getAsFile());
+          }
+        }
+
+        if (pastedFiles.length > 0) {
+          addFiles(pastedFiles);
+        }
+      });
+
+      function addFiles(files) {
+        for (let file of files) {
+          if (selectedFiles.length >= maxImages) {
+            alert(`Maximum of ${maxImages} images allowed.`);
+            break;
+          }
+          selectedFiles.push(file);
+        }
+        renderPreviews();
+      }
+
+      function removeFile(index) {
+        if (isThinking) return;
+        selectedFiles.splice(index, 1);
+        renderPreviews();
+      }
+
+      function renderPreviews() {
+        preview.innerHTML = "";
+        selectedFiles.forEach((file, index) => {
+          let container = document.createElement("div");
+          container.className = "preview-item";
+
+          let img = document.createElement("img");
+          img.src = URL.createObjectURL(file);
+
+          let removeBtn = document.createElement("button");
+          removeBtn.className = "remove-btn";
+          removeBtn.textContent = "✕";
+          removeBtn.onclick = () => removeFile(index);
+
+          container.appendChild(img);
+          container.appendChild(removeBtn);
+          preview.appendChild(container);
+        });
+      }
+
+      // -------------------------------------------------------------
+      // SPEECH RECOGNITION LOGIC
+      // -------------------------------------------------------------
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        function formatGrammarAndPunctuation(text) {
+          if (!text) return "";
+
+          let formatted = text.trim();
+
+          formatted = formatted
+            .replace(/\b(comma)\b/gi, ",")
+            .replace(/\b(period|full stop)\b/gi, ".")
+            .replace(/\b(question mark)\b/gi, "?")
+            .replace(/\b(exclamation mark|exclamation point)\b/gi, "!");
+
+          formatted = formatted.replace(
+            /([^,\.\?!])\s+(however|but|although|meanwhile|therefore)\b/gi,
+            "$1, $2",
+          );
+          formatted = formatted.replace(/\s+/g, " ");
+          formatted = formatted.replace(/\s+([,\.\?!])/g, "$1");
+
+          formatted = formatted.replace(
+            /(^\s*|[\.\?!]\s+)([a-z])/g,
+            (match, separator, char) => {
+              return separator + char.toUpperCase();
+            },
+          );
+
+          return formatted;
+        }
+
+        recognition.onresult = function (event) {
+          let interimTranscript = "";
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += " " + event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+
+          let combinedText = finalTranscript + " " + interimTranscript;
+          let formattedText = formatGrammarAndPunctuation(combinedText);
+
+          textarea.value = formattedText;
+          adjustTextareaSize();
+        };
+
+        recognition.onerror = function (event) {
+          console.error("Speech Recognition Error:", event.error);
+          if (event.error !== "no-speech") {
+            stopRecording();
+          }
+        };
+
+        recognition.onend = function () {
+          if (isRecording) {
+            recognition.start();
+          }
+        };
+      } else {
+        micBtn.style.display = "none";
+      }
+
+      function toggleVoiceInput() {
+        if (isThinking) return;
+        if (!recognition) {
+          alert("Speech Recognition is not supported in this browser.");
+          return;
+        }
+
+        if (isRecording) {
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      }
+
+      function startRecording() {
+        isRecording = true;
+        finalTranscript = textarea.value;
+        micBtn.classList.add("recording");
+        micBtn.textContent = "🛑";
+        recognition.start();
+      }
+
+      function stopRecording() {
+        isRecording = false;
+        micBtn.classList.remove("recording");
+        micBtn.textContent = "🎤";
+        if (recognition) recognition.stop();
+
+        if (textarea.value.trim()) {
+          let formatted = formatGrammarAndPunctuation(textarea.value);
+          if (!/[,\.\?!]$/.test(formatted)) {
+            formatted += ".";
+          }
+          textarea.value = formatted;
+          finalTranscript = formatted;
+        }
+        adjustTextareaSize();
+      }
+
+      // -------------------------------------------------------------
+      // EXPORT & COPY RESPONSE ACTIONS
+      // -------------------------------------------------------------
+      function copyToClipboard(text, btnElement) {
+        navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            const originalText = btnElement.innerHTML;
+            btnElement.innerHTML = "✓ Copied!";
+            setTimeout(() => {
+              btnElement.innerHTML = originalText;
+            }, 2000);
+          })
+          .catch((err) => {
+            alert("Failed to copy text.");
+          });
+      }
+
+      function downloadAsTXT(text) {
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `response_${Date.now()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      function downloadAsPDF(text) {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        const splitText = doc.splitTextToSize(text, 180);
+        let y = 15;
+        const pageHeight = doc.internal.pageSize.height;
+
+        for (let i = 0; i < splitText.length; i++) {
+          if (y > pageHeight - 15) {
+            doc.addPage();
+            y = 15;
+          }
+          doc.text(splitText[i], 15, y);
+          y += 7;
+        }
+
+        doc.save(`response_${Date.now()}.pdf`);
+      }
+
+      // -------------------------------------------------------------
+      // CHAT SUBMISSION LOGIC
+      // -------------------------------------------------------------
+      function addMessage(
+        text,
+        className,
+        files = [],
+        isAiResponse = false,
+        isLoader = false,
+        exifData = null
+      ) {
+        let wrapper = document.createElement("div");
+        wrapper.className = "message-wrapper";
+
+        let div = document.createElement("div");
+        div.className = "message " + className;
+
+        if (isLoader) {
+          div.innerHTML = `
+            <div class="infinity-loader-container">
+              <svg class="infinity-svg" viewBox="0 0 100 50">
+                <path class="infinity-bg" d="M 30,25 C 10,25 10,10 30,10 C 50,10 50,40 70,40 C 90,40 90,25 70,25 C 50,25 50,10 30,10 C 10,10 10,40 30,40 C 50,40 50,25 70,25" />
+                <path class="infinity-light" d="M 30,25 C 10,25 10,10 30,10 C 50,10 50,40 70,40 C 90,40 90,25 70,25 C 50,25 50,10 30,10 C 10,10 10,40 30,40 C 50,40 50,25 70,25" />
+              </svg>
+            </div>
+          `;
+        } else {
+          div.textContent = text;
+        }
+
+        // Attach user uploaded images preview
+        if (files.length > 0) {
+          let gallery = document.createElement("div");
+          gallery.className = "image-gallery";
+
+          files.forEach((file) => {
+            let img = document.createElement("img");
+            img.src = URL.createObjectURL(file);
+            gallery.appendChild(img);
+          });
+
+          div.appendChild(gallery);
+        }
+
+        // Attach EXIF Metadata Card if present in the backend response
+        if (exifData && exifData.length > 0) {
+          exifData.forEach((item) => {
+            if (item.metadata && Object.keys(item.metadata).length > 0) {
+              let card = document.createElement("div");
+              card.className = "exif-card";
+              let content = `<h4>📷 EXIF Metadata (${item.filename})</h4>`;
+
+              if (item.metadata.camera) {
+                content += `<div><strong>Device:</strong> ${item.metadata.camera.make || ''} ${item.metadata.camera.model || 'Unknown'}</div>`;
+              }
+              if (item.metadata.date_taken) {
+                content += `<div><strong>Date Taken:</strong> ${item.metadata.date_taken}</div>`;
+              }
+              if (item.metadata.gps_coordinates) {
+                const gps = item.metadata.gps_coordinates;
+                content += `<div><strong>GPS:</strong> ${gps.latitude.toFixed(6)}, ${gps.longitude.toFixed(6)}</div>`;
+                content += `<a href="${gps.google_maps_url}" target="_blank" class="map-button">📍 Open Google Maps Location</a>`;
+              }
+
+              card.innerHTML = content;
+              div.appendChild(card);
+            }
+          });
+        }
+
+        wrapper.appendChild(div);
+
+        if (isAiResponse) {
+          let actions = document.createElement("div");
+          actions.className = "action-buttons";
+
+          let copyBtn = document.createElement("button");
+          copyBtn.className = "action-btn";
+          copyBtn.innerHTML = "📋 Copy";
+          copyBtn.onclick = () => copyToClipboard(div.innerText, copyBtn);
+
+          let txtBtn = document.createElement("button");
+          txtBtn.className = "action-btn";
+          txtBtn.innerHTML = "📄 .TXT";
+          txtBtn.onclick = () => downloadAsTXT(div.innerText);
+
+          let pdfBtn = document.createElement("button");
+          pdfBtn.className = "action-btn";
+          pdfBtn.innerHTML = "📕 .PDF";
+          pdfBtn.onclick = () => downloadAsPDF(div.innerText);
+
+          actions.appendChild(copyBtn);
+          actions.appendChild(txtBtn);
+          actions.appendChild(pdfBtn);
+          wrapper.appendChild(actions);
+        }
+
+        messages.appendChild(wrapper);
+        messages.scrollTop = messages.scrollHeight;
+        return { wrapper, div };
+      }
+
+      function setInputState(disabled) {
+        isThinking = disabled;
+        textarea.disabled = disabled;
+        fileInput.disabled = disabled;
+        sendBtn.disabled = disabled;
+        micBtn.disabled = disabled;
+
+        sendBtn.style.opacity = disabled ? "0.5" : "1";
+        sendBtn.style.cursor = disabled ? "not-allowed" : "pointer";
+
+        if (disabled && isRecording) {
+          stopRecording();
+        }
+      }
+
+      async function send() {
+        if (isThinking) return;
+
+        let text = textarea.value.trim();
+        if (!text && selectedFiles.length === 0) return;
+
+        setInputState(true);
+
+        addMessage(text, "user", [...selectedFiles]);
+
+        let form = new FormData();
+        form.append("message", text);
+        // Keys match request.files.getlist('images') in Flask
+        selectedFiles.forEach((file) => form.append("images", file));
+
+        textarea.value = "";
+        finalTranscript = "";
+        textarea.style.height = "50px";
+        let uploadedFilesCopy = [...selectedFiles];
+        selectedFiles = [];
+        preview.innerHTML = "";
+
+        // Display animated infinity loader
+        let thinkingMsg = addMessage("", "ai", [], false, true);
+
+        try {
+          let response = await fetch("/chat", {
+            method: "POST",
+            body: form,
+          });
+
+          let data = await response.json();
+
+          thinkingMsg.wrapper.remove();
+
+          if (response.ok) {
+            // Pass data.exif_data so GPS coordinates & metadata render dynamically
+            addMessage(data.reply, "ai", [], true, false, data.exif_data);
+          } else {
+            addMessage(
+              "Error: " + (data.error || "Failed to generate response."),
+              "ai",
+              [],
+              false,
+            );
+          }
+        } catch (err) {
+          thinkingMsg.wrapper.remove();
+          addMessage(
+            "Error sending message. Please try again.",
+            "ai",
+            [],
+            false,
+          );
+        } finally {
+          setInputState(false);
+          textarea.focus();
+        }
+      }
+
+      textarea.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          send();
+        }
+      });
+    </script>
+  </body>
 </html>

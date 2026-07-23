@@ -1,94 +1,129 @@
 import os
 import base64
 import json
+import socket
+from io import BytesIO
 from flask import Flask, request, jsonify, render_template
 from openai import OpenAI
 
-# LangChain Search Engines
+# Image & OSINT Libraries
+from PIL import Image
+from PIL.ExifTags import TAGS, GPSTAGS
 from duckduckgo_search import DDGS
-from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
-from langchain_community.utilities import WikipediaAPIWrapper
-from langchain_core.tools import Tool
+import whois
 
 app = Flask(__name__)
-
-# Payload limits up to 32MB for handling up to 10 high-res images
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024
 
 api_key = os.environ.get("OPENAI_API_KEY")
-serpapi_key = os.environ.get("SERPAPI_API_KEY")
 client = OpenAI(api_key=api_key)
 
 
 # ==========================================
-# ADVANCED SEARCH ENGINE & IMAGE FINDER
+# EXIF & METADATA EXTRACTION MODULE
 # ==========================================
-def perform_image_and_product_search(query):
-    """
-    Searches for live web images, stock photography, shopping URLs, and absolute web links.
-    """
-    search_results = {
-        "images": [],
-        "shopping_urls": [],
-        "stock_urls": [],
-        "web_urls": []
-    }
-
-    # 1. DuckDuckGo Image & Web Search (Free, no key required)
+def convert_to_degrees(value):
+    """Helper to convert GPS coordinates to decimal degrees."""
     try:
-        with DDGS() as ddgs:
-            # Fetch Images
-            img_results = list(ddgs.images(keywords=query, max_results=6))
-            for img in img_results:
-                search_results["images"].append({
-                    "title": img.get("title", ""),
-                    "image_url": img.get("image", ""),
-                    "source_url": img.get("url", "")
-                })
+        d = float(value[0])
+        m = float(value[1])
+        s = float(value[2])
+        return d + (m / 60.0) + (s / 3600.0)
+    except Exception:
+        return None
 
-            # Fetch Web & Shopping Links
-            text_results = list(ddgs.text(keywords=query, max_results=6))
-            for res in text_results:
-                url = res.get("href", "")
-                title = res.get("title", "")
-                body = res.get("body", "").lower()
+def extract_image_exif(image_bytes):
+    """Extracts raw EXIF metadata and GPS coordinates from uploaded image."""
+    exif_summary = {
+        "has_exif": False,
+        "camera_info": {},
+        "gps_coordinates": None,
+        "date_taken": None
+    }
+    
+    try:
+        img = Image.open(BytesIO(image_bytes))
+        exif_data = img._getexif()
+        
+        if not exif_data:
+            return exif_summary
 
-                # Categorize into Shopping, Stock, or Web URLs
-                if any(k in url.lower() or k in body for k in ["shop", "buy", "store", "amazon", "ebay", "etsy", "price"]):
-                    search_results["shopping_urls"].append({"title": title, "url": url})
-                elif any(k in url.lower() or k in body for k in ["shutterstock", "getty", "unsplash", "stock", "freepik", "adobe"]):
-                    search_results["stock_urls"].append({"title": title, "url": url})
-                else:
-                    search_results["web_urls"].append({"title": title, "url": url})
+        exif_summary["has_exif"] = True
+        raw_tags = {}
+        
+        for tag_id, value in exif_data.items():
+            tag = TAGS.get(tag_id, tag_id)
+            raw_tags[tag] = value
+
+        # 1. Camera & Timestamp Info
+        if "Make" in raw_tags or "Model" in raw_tags:
+            exif_summary["camera_info"] = {
+                "make": str(raw_tags.get("Make", "Unknown")),
+                "model": str(raw_tags.get("Model", "Unknown")),
+                "software": str(raw_tags.get("Software", "Unknown"))
+            }
+        
+        exif_summary["date_taken"] = str(raw_tags.get("DateTimeOriginal", raw_tags.get("DateTime", "Unknown")))
+
+        # 2. Extract GPS IFD
+        gps_info = {}
+        if "GPSInfo" in raw_tags:
+            for key in raw_tags["GPSInfo"].keys():
+                sub_tag = GPSTAGS.get(key, key)
+                gps_info[sub_tag] = raw_tags["GPSInfo"][key]
+
+            lat = gps_info.get("GPSLatitude")
+            lat_ref = gps_info.get("GPSLatitudeRef")
+            lon = gps_info.get("GPSLongitude")
+            lon_ref = gps_info.get("GPSLongitudeRef")
+
+            if lat and lon and lat_ref and lon_ref:
+                lat_deg = convert_to_degrees(lat)
+                lon_deg = convert_to_degrees(lon)
+                
+                if lat_ref != "N":
+                    lat_deg = -lat_deg
+                if lon_ref != "E":
+                    lon_deg = -lon_deg
+
+                exif_summary["gps_coordinates"] = {
+                    "latitude": lat_deg,
+                    "longitude": lon_deg,
+                    "google_maps_url": f"https://www.google.com/maps?q={lat_deg},{lon_deg}"
+                }
+
     except Exception as e:
-        print(f"DuckDuckGo search error: {e}")
+        exif_summary["error"] = f"Failed to parse metadata: {str(e)}"
 
-    # 2. SerpApi Google Images/Shopping (Optional backup if key is available)
-    if serpapi_key:
+    return exif_summary
+
+
+# ==========================================
+# DOMAIN & WEB OSINT MODULE
+# ==========================================
+def perform_osint_lookup(query):
+    """Performs WHOIS and public records search."""
+    osint_data = {"domain_info": None, "network_info": None, "public_records": []}
+    clean_query = query.strip().replace("https://", "").replace("http://", "").split("/")[0]
+
+    if "." in clean_query and " " not in clean_query:
         try:
-            from serpapi import GoogleSearch
-            # Google Images
-            params = {"engine": "google_images", "q": query, "api_key": serpapi_key, "num": 5}
-            serp_img = GoogleSearch(params).get_dict().get("images_results", [])
-            for item in serp_img:
-                search_results["images"].append({
-                    "title": item.get("title", ""),
-                    "image_url": item.get("original", ""),
-                    "source_url": item.get("link", "")
-                })
+            domain_details = whois.whois(clean_query)
+            osint_data["domain_info"] = {
+                "registrar": domain_details.registrar,
+                "creation_date": str(domain_details.creation_date),
+                "org": domain_details.org,
+                "emails": domain_details.emails
+            }
+        except Exception:
+            pass
 
-            # Google Shopping
-            shop_params = {"engine": "google_shopping", "q": query, "api_key": serpapi_key, "num": 4}
-            serp_shop = GoogleSearch(shop_params).get_dict().get("shopping_results", [])
-            for item in serp_shop:
-                search_results["shopping_urls"].append({
-                    "title": item.get("title", "Shop Item"),
-                    "url": item.get("link", "")
-                })
-        except Exception as e:
-            print(f"SerpApi error: {e}")
+        try:
+            osint_data["network_info"] = {"resolved_ip": socket.gethostbyname(clean_query)}
+        except Exception:
+            pass
 
-    return search_results
+    return osint_data
 
 
 # ==========================================
@@ -102,72 +137,70 @@ def index():
 @app.route('/chat', methods=['POST'])
 def chat():
     user_text = request.form.get('message', '').strip()
-    image_files = request.files.getlist('images')  # Handles up to 10 images
+    image_files = request.files.getlist('images')
 
     if not user_text and not image_files:
         return jsonify({"error": "No message or image provided."}), 400
 
-    if len(image_files) > 10:
-        return jsonify({"error": "Maximum of 10 images allowed per request."}), 400
-
-    # 1. Detect if the user wants images, stock photos, or product recommendations
-    search_data = None
-    query_lower = user_text.lower()
-    triggers = ["show me", "picture of", "photo of", "image of", "find me", "buy", "stock photo", "where to get", "look like"]
-
-    if user_text and any(trigger in query_lower for trigger in triggers):
-        search_data = perform_image_and_product_search(user_text)
-
-    # 2. System Instructions
-    system_instruction = (
-        "You are an exceptionally intelligent, concise, and direct AI assistant.\n"
-        "1. When asked for pictures, photos, shopping options, or stock links, acknowledge the query directly and summarize what you found.\n"
-        "2. Cross-reference provided search data to suggest absolute URLs for shopping, stock photos, and official web references.\n"
-        "3. Always output active markdown links `[Title](URL)` for all suggested links."
-    )
-
-    if search_data:
-        system_instruction += f"\n\n[LIVE SEARCH & IMAGE DATA FOUND]\n{json.dumps(search_data, indent=2)}\n[END SEARCH DATA]"
-
-    # 3. Construct OpenAI user payload
+    exif_results = []
     user_content = []
 
-    if user_text:
-        user_content.append({"type": "text", "text": user_text})
-    elif image_files:
-        user_content.append({"type": "text", "text": "Directly solve or answer whatever is shown in the provided image(s)."})
-
-    # Convert up to 10 uploaded image files to Base64
+    # 1. Process Images for Visual Analysis & EXIF Metadata
     for img_file in image_files:
         if img_file and img_file.filename != '':
             image_bytes = img_file.read()
             mime_type = img_file.content_type or 'image/jpeg'
-            base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-            image_url = f"data:{mime_type};base64,{base64_encoded}"
+            
+            # Extract EXIF metadata
+            metadata = extract_image_exif(image_bytes)
+            exif_results.append({"filename": img_file.filename, "metadata": metadata})
 
+            # Base64 encode for Vision Model
+            base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
             user_content.append({
                 "type": "image_url",
-                "image_url": {"url": image_url}
+                "image_url": {"url": f"data:{mime_type};base64,{base64_encoded}"}
             })
+
+    if user_text:
+        user_content.append({"type": "text", "text": user_text})
+
+    # 2. Check for Domain/Text OSINT Triggers
+    osint_data = None
+    if user_text and any(k in user_text.lower() for k in ["whois", "domain", "lookup", "investigate"]):
+        osint_data = perform_osint_lookup(user_text)
+
+    # 3. System Instructions for Visual GEOINT & Metadata Analysis
+    system_instruction = (
+        "You are an OSINT and GEOINT (Geographic Intelligence) analysis AI.\n"
+        "1. If image EXIF metadata contains GPS coordinates, report the exact coordinates and map links.\n"
+        "2. Conduct visual GEOINT on images: inspect landforms, architecture, street signage, license plate styles, electrical pole designs, and vegetation to deduce the location.\n"
+        "3. Present findings structured cleanly under headings like **EXIF Metadata**, **Visual Indicators**, and **Probable Location**."
+    )
+
+    if exif_results:
+        system_instruction += f"\n\n[EXTRACTED EXIF METADATA]\n{json.dumps(exif_results, indent=2)}\n[END METADATA]"
+    if osint_data:
+        system_instruction += f"\n\n[DOMAIN OSINT DATA]\n{json.dumps(osint_data, indent=2)}\n[END OSINT DATA]"
 
     api_messages = [
         {"role": "system", "content": system_instruction},
         {"role": "user", "content": user_content}
     ]
 
-    # 4. Request response from OpenAI
     try:
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=api_messages,
-            max_tokens=1200,
+            max_tokens=1500,
             temperature=0.2
         )
         reply = response.choices[0].message.content
 
         return jsonify({
             "reply": reply,
-            "found_media": search_data
+            "exif_data": exif_results,
+            "osint_data": osint_data
         })
 
     except Exception as e:
